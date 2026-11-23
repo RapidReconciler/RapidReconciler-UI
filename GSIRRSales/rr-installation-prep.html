@@ -2462,7 +2462,7 @@
         </tbody>
       </table>
 
-      <p>Tell GSI which one in the submission form: <strong>Single Sign-On &rsaquo; Identity provider</strong>, just above <em>Submit to GSI</em>.</p>
+      <p>Tell GSI which one in the submission form: <strong>Single Sign-On &rsaquo; Identity provider</strong>, just above <em>Submit to GSI</em>. Choosing one shows the fields for the values below, so everything travels in your submission.</p>
 
       <div class="callout tip">
         <div class="callout-label">Entra and OpenID Connect need the same three values</div>
@@ -2472,7 +2472,7 @@
       <div class="diamond-divider"><span class="diamond"></span></div>
 
       <h2>What to send GSI &mdash; OpenID Connect or Microsoft Entra ID</h2>
-      <p>Create an application registration for RapidReconciler in your identity provider, then send these. Send the client secret by whatever secure channel your organization uses for credentials &mdash; not in the body of an email.</p>
+      <p>Create an application registration for RapidReconciler in your identity provider, then enter these in the submission form. The client secret travels only in the encrypted file the form downloads, never in the body of the email. If your copy of this guide cannot encrypt (the secret field is greyed out), give GSI the secret at the install meeting.</p>
       <table class="doc-table">
         <thead>
           <tr><th>Value</th><th>What it looks like</th><th>Where to find it</th></tr>
@@ -2517,7 +2517,7 @@
           <tr><td><strong>Signing certificate</strong></td><td>The public certificate, in PEM form. <strong>Note its expiry date.</strong></td></tr>
         </tbody>
       </table>
-      <p>If your provider publishes a federation metadata XML document, sending that one file covers all three.</p>
+      <p>If your provider publishes a federation metadata XML document, paste it into the submission form and click <strong>Read it</strong>: it fills all three. The signing certificate travels only in the encrypted file, like a password.</p>
 
       <h2>Email domains &mdash; required either way</h2>
       <p>List every email domain whose users should be sent to your identity provider, for example <code>example.com, example.co.uk</code>. RapidReconciler matches the domain of the address someone types on the sign-in page against this list to decide where to send them. <strong>An address on a domain that is not listed will be offered a RapidReconciler password instead</strong>, so a missing domain looks to that person like SSO is broken.</p>
@@ -2535,11 +2535,11 @@
         </thead>
         <tbody>
           <tr>
-            <td><strong>Redirect URI</strong> (OpenID Connect / Entra)<br><code>https://&lt;your-rapidreconciler-url&gt;/login/oauth2/code/&lt;id&gt;</code></td>
+            <td><strong>Redirect URI</strong> (OpenID Connect / Entra)<br>It ends with <code>/login/oauth2/code/</code> and the first part of your RapidReconciler hostname: for <code>rrprod-acme.getgsi.com</code>, <code>/login/oauth2/code/rrprod-acme</code>. The submission form shows yours once you enter your hostname.</td>
             <td>An allowed <em>redirect URI</em> / <em>reply URL</em> on the application registration, Web platform. Entra rejects an unregistered one with error <code>AADSTS50011</code>.</td>
           </tr>
           <tr>
-            <td><strong>ACS URL</strong> and <strong>SP Entity ID</strong> (SAML)</td>
+            <td><strong>ACS URL</strong> and <strong>SP Entity ID</strong> (SAML)<br>The ACS URL ends with <code>/login/saml2/sso/</code> and the same first part of your hostname.</td>
             <td>The assertion consumer service URL and service provider entity ID on your SAML application.</td>
           </tr>
         </tbody>
@@ -2644,7 +2644,7 @@ GO
 PRINT N'rruser is ready for the RapidReconciler install.';
 GO</div></div>
       <p><button type="button" class="back-btn" id="copy-grant-script" onclick="copyGrantScript(this)">Copy the script</button></p>
-      <p>Then your DBA runs <strong>install Script 4</strong> for the SSIS Windows account, the same way, with the same sysadmin login. GSI sends it to you. If you give GSI an install login below, GSI runs Script 4 for you instead.</p>
+      <p>Then your DBA creates the SSIS Windows account and runs <strong>install Script 4</strong> for it, the same way, with the same sysadmin login. Both are below. If you give GSI an install login below, GSI runs Script 4 for you instead.</p>
 
       <h2>Creating the SSIS account</h2>
       <ol>
@@ -2652,6 +2652,102 @@ GO</div></div>
         <li><strong>Grant it <em>Log on as a batch job</em>.</strong> On that server, open <em>Local Security Policy</em> (<code>secpol.msc</code>) &rarr; <em>Local Policies</em> &rarr; <em>User Rights Assignment</em> &rarr; <em>Log on as a batch job</em>, and add the account. If your domain manages this right through Group Policy, add the account in the Group Policy Object that applies to the server instead (<em>Computer Configuration &rarr; Policies &rarr; Windows Settings &rarr; Security Settings &rarr; Local Policies &rarr; User Rights Assignment</em>). A local change to a right that Group Policy controls is overwritten at the next policy refresh.</li>
         <li><strong>Decide on password expiry.</strong> Set the password not to expire, or plan to re-run Script 4 each time it changes (see below).</li>
       </ol>
+
+      <h2 id="script-4">Install Script 4</h2>
+      <p>Install Script 4 lets RapidReconciler&rsquo;s data loads run as the SSIS account. Your DBA runs it once the grant script has run and the account exists. Skip it if you give GSI a sysadmin install login below: GSI runs it for you.</p>
+      <ol>
+        <li><strong>Run the script.</strong> In SQL Server Management Studio, connect to the SQL Server with a sysadmin login, open a new query, and turn on <em>Query &rarr; SQLCMD Mode</em>. Paste the script, then add these two lines at the very top, with the account and its password: <code>:setvar RR_PROXY_ACCOUNT "DOMAIN\rr_ssis"</code> and <code>:setvar RR_PROXY_PASSWORD "the account's password"</code>. Do not save the file with the password in it. The script ends with <em>Proxy RapidReconciler SSIS ready</em>.</li>
+        <li><strong>It is safe to run again.</strong> When the account&rsquo;s password changes, run it again with the new password. It updates the stored password in place.</li>
+      </ol>
+      <div class="cmd-block"><div class="cmd-line" id="install-script-4">Print                   'RapidReconciler install Script 4: SQL Agent access and the SSIS proxy'
+go
+
+--          RapidReconciler install Script 4.
+--          Run once per SQL Server instance, as a sysadmin, after the pre-install grant
+--          script has created the rruser login.
+--
+--          RapidReconciler's data loads run in the SSIS catalog (SSISDB), which does not
+--          accept SQL Server logins. This script lets them run as a Windows account you
+--          choose:
+--            1. it adds rruser to SQLAgentReaderRole in msdb, so RapidReconciler can show
+--               the data refresh schedule;
+--            2. it creates the "RapidReconciler SSIS" credential and SQL Server Agent
+--               proxy for that Windows account, gives the account ssis_admin in SSISDB,
+--               and lets rruser use the proxy for PowerShell job steps.
+--          The account's password is kept only in this SQL Server's credential store.
+--
+--          BEFORE RUNNING: in SSMS, Query &gt; SQLCMD Mode, then put these two lines at the
+--          top of the query window (do not save the file with the password in it):
+--              :setvar RR_PROXY_ACCOUNT  "DOMAIN\account"
+--              :setvar RR_PROXY_PASSWORD "the account's password"
+--          From sqlcmd: -v RR_PROXY_ACCOUNT="DOMAIN\account", or set both as
+--          environment variables first, which keeps the password off the command line.
+--          A single quote in the password must be typed twice.
+--
+--          The account needs no Windows group or administrator right, only "Log on as a
+--          batch job" on the server that runs Integration Services. When its password
+--          changes, run this script again with the new one: the credential is updated
+--          in place. Safe to run again.
+
+Print                   'Granting rruser read access to SQL Agent (msdb)'
+                        use msdb
+                        go
+                        if exists (select 1 from sys.server_principals where name = N'rruser')
+                        begin
+                            if not exists (select 1 from sys.database_principals where name = N'rruser')
+                                create user rruser for login rruser;
+                            if not exists (
+                                select 1 from sys.database_role_members rm
+                                join sys.database_principals r on rm.role_principal_id = r.principal_id and r.name = N'SQLAgentReaderRole'
+                                join sys.database_principals u on rm.member_principal_id = u.principal_id and u.name = N'rruser')
+                                alter role SQLAgentReaderRole add member rruser;
+                            Print 'rruser added to SQLAgentReaderRole';
+                        end
+go
+
+-- Stop at the first error from here on: a half-made proxy is worse than none.
+:on error exit
+Print                   'Creating the RapidReconciler SSIS proxy for $(RR_PROXY_ACCOUNT)'
+                        use master
+                        go
+                        if not exists (select 1 from sys.server_principals where name = N'rruser')
+                            throw 50001, 'Run the pre-install grant script first: the rruser login does not exist, and the proxy is granted to it.', 1;
+                        -- The Windows login, so SSISDB can see the account.
+                        if not exists (select 1 from sys.server_principals where name = N'$(RR_PROXY_ACCOUNT)')
+                            exec (N'create login ' + N'[$(RR_PROXY_ACCOUNT)]' + N' from windows');
+                        -- The credential. Re-running the script applies a new password.
+                        if exists (select 1 from sys.credentials where name = N'RapidReconciler SSIS')
+                            alter credential [RapidReconciler SSIS] with identity = N'$(RR_PROXY_ACCOUNT)', secret = N'$(RR_PROXY_PASSWORD)';
+                        else
+                            create credential [RapidReconciler SSIS] with identity = N'$(RR_PROXY_ACCOUNT)', secret = N'$(RR_PROXY_PASSWORD)';
+                        Print 'Credential RapidReconciler SSIS set for $(RR_PROXY_ACCOUNT)';
+go
+                        use SSISDB
+                        go
+                        if not exists (select 1 from sys.database_principals where sid = suser_sid(N'$(RR_PROXY_ACCOUNT)'))
+                            exec (N'create user ' + N'[$(RR_PROXY_ACCOUNT)]' + N' for login ' + N'[$(RR_PROXY_ACCOUNT)]');
+                        declare @u sysname = (select name from sys.database_principals where sid = suser_sid(N'$(RR_PROXY_ACCOUNT)'));
+                        if is_rolemember(N'ssis_admin', @u) = 0
+                            exec sp_addrolemember N'ssis_admin', @u;
+                        Print 'The proxy account is in SSISDB ssis_admin';
+go
+                        use msdb
+                        go
+                        if not exists (select 1 from dbo.sysproxies where name = N'RapidReconciler SSIS')
+                            exec dbo.sp_add_proxy @proxy_name = N'RapidReconciler SSIS', @credential_name = N'RapidReconciler SSIS',
+                                 @enabled = 1, @description = N'Runs the RapidReconciler SSIS catalog steps (deploy, environment, load) under a Windows account.';
+                        if not exists (select 1 from dbo.sysproxysubsystem ps
+                                       join dbo.sysproxies p on p.proxy_id = ps.proxy_id
+                                       join dbo.syssubsystems s on s.subsystem_id = ps.subsystem_id
+                                       where p.name = N'RapidReconciler SSIS' and s.subsystem = N'PowerShell')
+                            exec dbo.sp_grant_proxy_to_subsystem @proxy_name = N'RapidReconciler SSIS', @subsystem_name = N'PowerShell';
+                        if not exists (select 1 from dbo.sysproxylogin pl
+                                       join dbo.sysproxies p on p.proxy_id = pl.proxy_id
+                                       where p.name = N'RapidReconciler SSIS' and pl.sid = suser_sid(N'rruser'))
+                            exec dbo.sp_grant_login_to_proxy @login_name = N'rruser', @proxy_name = N'RapidReconciler SSIS';
+                        Print 'Proxy RapidReconciler SSIS ready: runs as $(RR_PROXY_ACCOUNT), usable by rruser for PowerShell steps';
+go</div></div>
+      <p><button type="button" class="back-btn" id="copy-script-4" onclick="copyScript4(this)">Copy Script 4</button></p>
 
       <h2>Your entries</h2>
       <table>
@@ -3039,9 +3135,13 @@ GO</div></div>
            Optional, like the topic it points to. The submission's SINGLE SIGN-ON section carries the choice;
            VALC's install-email-parser.js reads its "Protocol:" line. -->
       <h2>Single Sign-On</h2>
-      <p>Optional. If your users will sign in with your own corporate identity, choose your identity provider. The details to send GSI are in <a href="javascript:void(0)" onclick="showView('topic-sso')">6. Single Sign-On</a>. Leave it at <strong>Not used</strong> if your users will sign in with a RapidReconciler username and password.</p>
+      <p>Optional. If your users will sign in with your own corporate identity, choose your identity provider and fill in the details below. What each one means and where to find it is in <a href="javascript:void(0)" onclick="showView('topic-sso')">6. Single Sign-On</a>. Leave it at <strong>Not used</strong> if your users will sign in with a RapidReconciler username and password.</p>
+      <!-- VLC-300 (owner 2026-11-18, "Yes, split SSO out"): the submission carries what topic 6 lists, so GSI's import fills
+           the customer's SSO tab. Labels in buildBody's SINGLE SIGN-ON section are read by VALC's install-email-parser.js
+           (SSO_FIELDS): keep them byte-for-byte. The client secret and the signing certificate travel in the sealed
+           .rrprep file only (SECRET_FIELD_IDS), never the email text. -->
       <table>
-        <thead><tr><th style="width:25%;">Field</th><th>Value</th></tr></thead>
+        <thead><tr><th style="width:40%;">Field</th><th>Value</th></tr></thead>
         <tbody>
           <tr><td>Identity provider</td><td class="fill-cell"><select class="fill-input" id="sso-protocol" aria-label="Identity provider for single sign-on">
             <option value="Not used" selected>Not used</option>
@@ -3049,6 +3149,18 @@ GO</div></div>
             <option value="OpenID Connect">OpenID Connect (Okta, Google, Ping, Auth0)</option>
             <option value="SAML 2.0">SAML 2.0</option>
           </select></td></tr>
+          <tr data-sso="any" hidden><td>Your RapidReconciler hostname <em>(from GSI, e.g. <code>rrprod-acme.getgsi.com</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sso-hostname" aria-label="Your RapidReconciler hostname" placeholder="rrprod-[companyname].getgsi.com" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="any" hidden><td>Email domains <em>(comma-separated, e.g. <code>example.com, example.co.uk</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sso-domains" aria-label="Email domains for single sign-on" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="oidc" hidden><td>Issuer URL</td><td class="fill-cell"><input class="fill-input" type="text" id="sso-issuer" aria-label="Issuer URL" placeholder="https://login.microsoftonline.com/<your-tenant-id>/v2.0" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="oidc" hidden><td>Client ID</td><td class="fill-cell"><input class="fill-input" type="text" id="sso-client-id" aria-label="Client ID" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="oidc" hidden><td>Client secret <em>(the secret&rsquo;s value, not its ID)</em></td><td class="fill-cell"><input class="fill-input" type="password" id="sso-client-secret" aria-label="Client secret" autocomplete="new-password"></td></tr>
+          <tr data-sso="oidc" hidden><td>Scopes <em>(only if yours differ)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sso-scopes" aria-label="Scopes" value="openid, profile, email" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="oidc" hidden><td>Email claim <em>(only if yours differs)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sso-claim" aria-label="Email claim" value="email" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="saml" hidden><td>Federation metadata XML <em>(optional: paste it and click Read it, to fill the three fields below)</em></td><td class="fill-cell"><textarea class="fill-input" id="sso-metadata" aria-label="Federation metadata XML" rows="3" spellcheck="false"></textarea><button type="button" class="back-btn" onclick="readSsoMetadata()">Read it</button> <span class="submit-status" id="sso-metadata-status"></span></td></tr>
+          <tr data-sso="saml" hidden><td>IdP Entity ID</td><td class="fill-cell"><input class="fill-input" type="text" id="sso-idp-entity" aria-label="IdP entity ID" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="saml" hidden><td>IdP Sign-On URL</td><td class="fill-cell"><input class="fill-input" type="text" id="sso-idp-url" aria-label="IdP sign-on URL" autocomplete="off" spellcheck="false"></td></tr>
+          <tr data-sso="saml" hidden><td>Signing certificate <em>(PEM)</em></td><td class="fill-cell"><textarea class="fill-input" id="sso-idp-cert" aria-label="Signing certificate" rows="3" placeholder="-----BEGIN CERTIFICATE-----" spellcheck="false"></textarea></td></tr>
+          <tr data-sso="any" hidden><td><span id="sso-redirect-label">Your redirect URI ends with</span> <em>(GSI sends the full address; see 6. Single Sign-On)</em></td><td class="fill-cell"><code id="sso-redirect-tail">/login/oauth2/code/&hellip;</code></td></tr>
         </tbody>
       </table>
 
@@ -3222,14 +3334,118 @@ GO</div></div>
 
   // VLC-296: the step-7 passwords. They go into the sealed .rrprep file only: never the email text, never storage.
   // VLC-299: and the rruser password the DBA gives the pre-install grant script, sealed the same way.
-  var SECRET_FIELD_IDS = ['sql-rruser-pass', 'sql-install-pass', 'ssis-pass'];
+  // VLC-300: and the single sign-on client secret and signing certificate, which the sealed file carries the same way.
+  var SECRET_FIELD_IDS = ['sql-rruser-pass', 'sql-install-pass', 'ssis-pass', 'sso-client-secret', 'sso-idp-cert'];
+
+  // ============================================================
+  // Single sign-on details (VLC-300)
+  // ============================================================
+  // The SINGLE SIGN-ON section of the submission carries what topic 6 lists, so GSI's import (RapidReconciler-Valc
+  // install-email-parser.js, SSO_FIELDS) fills the customer's SSO tab. Labels byte-for-byte with that parser.
+  function ssoFamily() {
+    var p = getValue('sso-protocol');
+    if (p === 'Microsoft Entra ID' || p === 'OpenID Connect') return 'oidc';
+    if (p === 'SAML 2.0') return 'saml';
+    return null;
+  }
+  /** The registration ID GSI's VALC derives from the hostname: its first label (RapidReconciler-Valc
+   *  ClientSsoService.registrationIdFromHost). */
+  function ssoRegistrationId() {
+    var h = getValue('sso-hostname').toLowerCase().replace(/^[a-z]+:\/\//, '').split('/')[0].split(':')[0];
+    var label = h.split('.')[0];
+    return /^[a-z0-9][a-z0-9-]{0,62}$/.test(label) && !/-$/.test(label) && label !== 'azure' && !/^client-\d+$/.test(label)
+      ? label : '';
+  }
+  function applySsoVisibility() {
+    var fam = ssoFamily();
+    var rows = document.querySelectorAll('tr[data-sso]');
+    for (var i = 0; i < rows.length; i++) {
+      var which = rows[i].getAttribute('data-sso');
+      rows[i].hidden = !fam || (which !== 'any' && which !== fam);
+    }
+    var label = document.getElementById('sso-redirect-label');
+    if (label) label.textContent = fam === 'saml' ? 'Your ACS URL ends with' : 'Your redirect URI ends with';
+    var tail = document.getElementById('sso-redirect-tail');
+    if (tail) {
+      var id = ssoRegistrationId();
+      tail.textContent = (fam === 'saml' ? '/login/saml2/sso/' : '/login/oauth2/code/') + (id || '…');
+    }
+  }
+  /** One line of base64: the PEM body without its armour or line breaks. */
+  function ssoCertLine(pem) {
+    return String(pem || '').replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '');
+  }
+  /** The SINGLE SIGN-ON section's lines after "Protocol:". None when single sign-on is not used. */
+  function ssoLines(v, secret) {
+    var fam = ssoFamily();
+    if (!fam) return [];
+    var out = [
+      '  RapidReconciler hostname:      ' + v('sso-hostname'),
+      '  Email domains:                 ' + v('sso-domains')
+    ];
+    if (fam === 'oidc') {
+      out.push('  Issuer URL:                    ' + v('sso-issuer'));
+      out.push('  Client ID:                     ' + v('sso-client-id'));
+      out.push('  Client secret:                 ' + secret('sso-client-secret'));
+      out.push('  Scopes:                        ' + v('sso-scopes'));
+      out.push('  Email claim:                   ' + v('sso-claim'));
+    } else {
+      var cert = secret('sso-idp-cert');
+      if (cert.charAt(0) !== '[' && cert.charAt(0) !== '(') cert = ssoCertLine(cert);
+      out.push('  IdP entity ID:                 ' + v('sso-idp-entity'));
+      out.push('  IdP sign-on URL:               ' + v('sso-idp-url'));
+      out.push('  IdP signing certificate:       ' + cert);
+    }
+    return out;
+  }
+  /** Read a pasted federation metadata document into the three SAML fields, in this browser. Nothing is sent. */
+  function readSsoMetadata() {
+    var status = document.getElementById('sso-metadata-status');
+    var say = function (t) { if (status) status.textContent = t; };
+    var xml = getValue('sso-metadata');
+    if (!xml) { say('Paste the metadata first.'); return; }
+    var doc;
+    try { doc = new DOMParser().parseFromString(xml, 'application/xml'); } catch (e) { doc = null; }
+    if (!doc || doc.getElementsByTagName('parsererror').length) { say('That is not readable XML.'); return; }
+    var byLocal = function (name) {
+      var all = doc.getElementsByTagName('*'), out = [];
+      for (var i = 0; i < all.length; i++) if (all[i].localName === name) out.push(all[i]);
+      return out;
+    };
+    var entity = byLocal('EntityDescriptor')[0];
+    var sso = byLocal('SingleSignOnService'), url = '';
+    for (var i = 0; i < sso.length; i++) {
+      if (!url) url = sso[i].getAttribute('Location') || '';
+      if (/HTTP-Redirect/.test(sso[i].getAttribute('Binding') || '')) { url = sso[i].getAttribute('Location') || url; break; }
+    }
+    var cert = '';
+    var kds = byLocal('KeyDescriptor');
+    for (var k = 0; k < kds.length && !cert; k++) {
+      var use = kds[k].getAttribute('use');
+      if (use && use !== 'signing') continue;
+      var x = kds[k].getElementsByTagNameNS('*', 'X509Certificate')[0];
+      if (x && x.textContent.trim()) cert = x.textContent.replace(/\s+/g, '');
+    }
+    var set = function (id, val) { var el = getField(id); if (el && val && !el.disabled) el.value = val; };
+    set('sso-idp-entity', entity ? entity.getAttribute('entityID') : '');
+    set('sso-idp-url', url);
+    if (cert) set('sso-idp-cert', '-----BEGIN CERTIFICATE-----\n' + cert.replace(/(.{64})/g, '$1\n').replace(/\n$/, '') + '\n-----END CERTIFICATE-----');
+    var certEl = getField('sso-idp-cert');
+    say(entity && url && cert ? (certEl && certEl.disabled ? 'Read the entity ID and sign-on URL. Give GSI the certificate at the install meeting.'
+      : 'Read: the entity ID, sign-on URL and certificate are filled in.') : 'Read what it had; check the fields below.');
+  }
+  window.readSsoMetadata = readSsoMetadata;   // the button's onclick; this script runs inside an IIFE
 
   // VLC-299: copies the pre-install grant script as text (the page shows it with &gt; escaped).
-  function copyGrantScript(btn) {
-    var el = document.getElementById('rruser-grant-script');
+  function copyGrantScript(btn) { copyScriptText(btn, 'rruser-grant-script', 'Copy the script'); }
+  // Owner 2026-11-22 ("Put it on the prep page"): install Script 4, the DB repo's file, shown in full and copied the
+  // same way. The DB repo's check-prep-script4.yml fails while this copy differs from that file.
+  function copyScript4(btn) { copyScriptText(btn, 'install-script-4', 'Copy Script 4'); }
+  function copyScriptText(btn, id, label) {
+    var el = document.getElementById(id);
     if (!el) return;
     var text = el.textContent;
-    var done = function () { if (btn) { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy the script'; }, 2000); } };
+    var done = function () { if (btn) { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = label; }, 2000); } };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(done, function () { selectGrantScript(el); });
     } else {
@@ -3243,7 +3459,8 @@ GO</div></div>
     sel.removeAllRanges();
     sel.addRange(range);
   }
-  window.copyGrantScript = copyGrantScript;   // the button's onclick; this script runs inside an IIFE
+  window.copyGrantScript = copyGrantScript;   // the buttons' onclick; this script runs inside an IIFE
+  window.copyScript4 = copyScript4;
 
   // Server fields keyed by topology — each entry has a friendly label, the
   // server-name input id, and the internal-IP input id. Both name and IP are
@@ -3870,7 +4087,8 @@ GO</div></div>
       '',
       // VLC-269: read by VALC's import (install-email-parser.js, the "Protocol:" line).
       'SINGLE SIGN-ON',
-      '  Protocol:                      ' + (getValue('sso-protocol') || 'Not used'),
+      '  Protocol:                      ' + (getValue('sso-protocol') || 'Not used')
+    ]).concat(ssoLines(v, secret)).concat([
       '',
       'SUBMITTED BY',
       '  Customer / Company:            ' + v('sub-company'),
@@ -4040,6 +4258,12 @@ GO</div></div>
       var el = getField(JDE_FIELD_IDS[i]);
       if (el) el.addEventListener('input', validateForm);
     }
+    // VLC-300: the single sign-on rows follow the identity provider, and the redirect URI's ending the hostname.
+    var ssoProto = getField('sso-protocol');
+    if (ssoProto) ssoProto.addEventListener('change', applySsoVisibility);
+    var ssoHost = getField('sso-hostname');
+    if (ssoHost) ssoHost.addEventListener('input', applySsoVisibility);
+    applySsoVisibility();
     // Wire up topology radio change
     var radios = document.querySelectorAll('input[name="topology-choice"]');
     for (var j = 0; j < radios.length; j++) {
