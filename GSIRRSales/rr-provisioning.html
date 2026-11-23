@@ -1200,24 +1200,23 @@
       </table>
 
       <h2>How the Database Install Runs</h2>
-      <p>The RapidReconciler V8 database is installed remotely. GSI runs the install against your SQL Server during a scheduled maintenance window, following a fixed sequence:</p>
+      <p>The RapidReconciler V8 database is installed remotely. GSI does not need a sysadmin login for it. Before the window, your DBA runs a short <strong>pre-install grant script</strong> (in the installation prep document) with their own sysadmin login: it creates the <code>rruser</code> SQL Server login, with a password your DBA chooses, and gives it only the rights described under Security Posture. GSI then runs the install as <code>rruser</code> against your SQL Server during a scheduled maintenance window, following a fixed sequence:</p>
       <ol>
-        <li><strong>Create the database</strong> &mdash; a single new SQL Server database is created (<code>CREATE DATABASE</code>).</li>
+        <li><strong>Create the database</strong> &mdash; a single new SQL Server database is created (<code>CREATE DATABASE</code>). <code>rruser</code> creates it, so it owns it.</li>
         <li><strong>Publish the schema</strong> &mdash; the RapidReconciler V8 schema (delivered as a SQL Server dacpac) is published into the new database.</li>
-        <li><strong>Create the login</strong> &mdash; the <code>rruser</code> SQL Server login is created with the scope described under Security Posture.</li>
         <li><strong>Register the database</strong> &mdash; the database is registered with GSI's control plane so it can be managed and monitored.</li>
-        <li><strong>Set up the SSIS proxy</strong> &mdash; install Script 4 creates the <code>RapidReconciler SSIS</code> credential and SQL Server Agent proxy for the Windows account RapidReconciler&rsquo;s data loads run as, and gives that account <code>ssis_admin</code> in SSISDB.</li>
       </ol>
+      <p>Your DBA also runs <strong>install Script 4</strong> with their sysadmin login. It creates the <code>RapidReconciler SSIS</code> credential and SQL Server Agent proxy for the Windows account RapidReconciler&rsquo;s data loads run as, and gives that account <code>ssis_admin</code> in SSISDB.</p>
 
       <h3>What You Provide for the Install Window</h3>
       <ul>
         <li>Temporary network access to the SQL Server from GSI for the duration of the scheduled window. Every later upgrade of the RapidReconciler V8 database schema needs the same temporary access, during its own scheduled window.</li>
-        <li>A sysadmin-level SQL install account &mdash; either a SQL login that is a member of the <code>sysadmin</code> server role, or a Windows account with sysadmin rights on the instance. The SQL Server <em>service</em> account itself does not serve as a connection credential; a separate login or Windows account is needed to connect and run the install.</li>
+        <li>The pre-install grant script run by your DBA, and the <code>rruser</code> password entered in the prep document. GSI&rsquo;s readiness check signs in as <code>rruser</code> before the window and names any grant that is missing.</li>
         <li>A Windows account for the SSIS proxy. The SSIS catalog does not accept SQL Server logins, so the package deploy, its environment and the data loads run as this account. It needs only the <em>Log on as a batch job</em> right: no administrator rights and no Windows group. A dedicated account is recommended; a reused service account works, but each change to its password stops the loads until Script 4 is run again.</li>
       </ul>
 
-      <h3>Running the Install Unattended</h3>
-      <p>The installation prep document lets your team give GSI a sysadmin SQL login and the SSIS Windows account, with their passwords, ahead of time. GSI then runs the whole sequence above, Script 4 included, without anyone from your team on the call. Both are optional: if they are left out, GSI asks for them during the install meeting.</p>
+      <h3>If You Prefer GSI to Use a Sysadmin Login</h3>
+      <p>This is optional. The installation prep document also lets your team give GSI a sysadmin SQL login and the SSIS Windows account, with their passwords, ahead of time. GSI then signs in with that login instead of <code>rruser</code>, creates <code>rruser</code> itself, and runs Script 4, without anyone from your team on the call.</p>
       <ul>
         <li>The passwords travel only inside the encrypted file the prep document produces, never in the email text.</li>
         <li>GSI keeps them encrypted until the install, uses them for it, and deletes both as soon as Script 4 has run. From then on the SSIS account&rsquo;s password is held only in your SQL Server&rsquo;s credential store.</li>
@@ -1698,20 +1697,20 @@
       </div>
 
       <h3>The <code>rruser</code> Login &mdash; Credential Model</h3>
-      <p>GSI creates the <code>rruser</code> SQL Server login with <code>CHECK_POLICY = OFF</code> and <code>CHECK_EXPIRATION = OFF</code>, using a GSI-generated password that GSI manages on your behalf (stored and synced in GSI's VALC control plane).</p>
+      <p>Your DBA creates the <code>rruser</code> SQL Server login with the pre-install grant script, with <code>CHECK_POLICY = OFF</code> and <code>CHECK_EXPIRATION = OFF</code>, using a password they choose. It reaches GSI only inside the encrypted prep file, and GSI keeps it encrypted in its VALC control plane, because RapidReconciler signs in with it every day. If your team instead gives GSI a sysadmin login for the install, GSI creates <code>rruser</code> with a password GSI generates, unless your DBA has already created it.</p>
       <p>With <code>CHECK_POLICY</code> off, the server-level password policy is bypassed for this one service login, which is deliberate:</p>
       <ul>
-        <li>The GSI-managed password cannot violate your complexity or expiration rules, so it never trips a policy your team didn't set for it.</li>
         <li>The service account never expires, so there are no surprise lockouts breaking scheduled data refreshes.</li>
+        <li>A password GSI generates cannot violate your complexity or expiration rules, so it never trips a policy your team didn&rsquo;t set for it.</li>
       </ul>
-      <p>As a backstop, the generated password is 28 alphanumeric characters and also satisfies 3-of-4 Windows complexity &mdash; it is strong regardless of the policy bypass.</p>
+      <p>As a backstop, choose a long password: the prep document asks for 16 or more letters and digits. A password GSI generates is 28 alphanumeric characters and also satisfies 3-of-4 Windows complexity.</p>
 
       <p>The <code>rruser</code> login is scoped narrowly to exactly what RapidReconciler needs:</p>
       <ul class="spec-list">
-        <li class="spec-row"><span class="spec-key">RapidReconciler database</span><span class="spec-val"><code>db_owner</code> &mdash; on the RapidReconciler database only.</span></li>
+        <li class="spec-row"><span class="spec-key">RapidReconciler database</span><span class="spec-val"><code>db_owner</code> &mdash; on the RapidReconciler database only. <code>rruser</code> creates that database, so it is its owner.</span></li>
         <li class="spec-row"><span class="spec-key"><code>msdb</code></span><span class="spec-val"><code>SQLAgentOperatorRole</code> and <code>SQLAgentReaderRole</code>, to create and run RapidReconciler's own SQL Agent jobs and read their status and history. It owns those jobs and may use the <code>RapidReconciler SSIS</code> proxy. It has no general read access to <code>msdb</code>.</span></li>
         <li class="spec-row"><span class="spec-key"><code>SSISDB</code></span><span class="spec-val"><code>ssis_admin</code>, to read the status and history of RapidReconciler's SSIS runs. A separate Windows account deploys and runs the packages, through the <code>RapidReconciler SSIS</code> proxy that install Script 4 creates.</span></li>
-        <li class="spec-row"><span class="spec-key">Server level</span><span class="spec-val"><code>VIEW SERVER STATE</code> &mdash; for health and diagnostics only.</span></li>
+        <li class="spec-row"><span class="spec-key">Server level</span><span class="spec-val"><code>VIEW SERVER STATE</code> &mdash; for health and diagnostics only. <code>CREATE ANY DATABASE</code> &mdash; to create the RapidReconciler database. Not <code>dbcreator</code>, which could also change or drop your other databases, and not <code>sysadmin</code>.</span></li>
       </ul>
       <p>The login has no rights on any other user database on the instance.</p>
 
@@ -1721,7 +1720,7 @@
       <p>The install adds exactly two objects, and nothing more:</p>
       <ul>
         <li><strong>One new database</strong>, named <code>RapidReconciler_&lt;suffix&gt;</code> (for example, <code>RapidReconciler_Prod</code>). No existing database is touched, altered, or read from during the install.</li>
-        <li><strong>The <code>rruser</code> server login</strong>, scoped exactly as described above &mdash; <code>db_owner</code> on the RapidReconciler database only, plus the limited <code>msdb</code> / <code>SSISDB</code> roles and server-level <code>VIEW SERVER STATE</code>.</li>
+        <li><strong>The <code>rruser</code> server login</strong>, which your DBA creates with the pre-install grant script, scoped exactly as described above &mdash; <code>db_owner</code> on the RapidReconciler database only, plus the limited <code>msdb</code> / <code>SSISDB</code> roles and server-level <code>VIEW SERVER STATE</code> and <code>CREATE ANY DATABASE</code>.</li>
       </ul>
 
       <p>You choose how the install is run:</p>
