@@ -994,6 +994,58 @@ answered (`Tools/test-connection-check-topology.js`).
 
 ---
 
+## What's new: the active database's release notes (VLC-281)
+
+**Status: BUILT, not yet merged.** Owner ruling 2026-11-23, "After sign-in": one V8 front end serves every customer
+in an environment, so the sign-in page cannot show a customer their own bundle's release notes. Home shows them
+instead, in a **What's new in RapidReconciler** card above everything (`#whatsNew`, under the Message Center), once
+per user per bundle.
+
+**Caller:** `home.html` (`loadWhatsNew()`, from `loadActiveDbSurfaces`, so on sign-in and on every database switch)
+through `RRDB.valcFetch`, NOT `rrFetch`, as the Message Center does: a failure (a VALC older than this route answers
+404) leaves the card hidden and paints no Home notice. An answer for a database the user has switched away from is
+not painted (`Tools/test-vlc281-whats-new.js`, W4).
+
+### `GET api/v1/tenant/release-notes?database=<active db name>`
+
+**What VALC does** (`TenantReleaseNotesController` &rarr; `CustomerReleaseNotesService.forDatabase`):
+
+1. Who and whose database: `ClientsController.resolveOwnDatabase`, the one implementation of the ownership rule. A
+   name is looked up within the caller's own client.
+2. Which bundle: the newest bundle that is published, not withdrawn, and approved for this VALC's environment (Dev
+   needs no approval), whose database and Services releases are the ones VALC's deploy records show this database
+   running (`ReleaseTrainService.readRunning`), and whose SSIS release is too when that can be read. When the database
+   or Services release cannot be read, there is no bundle, and the answer is `null` rather than a guess.
+3. The notes: `release_train_notes` for that bundle. On Dev a person saves them on step 4 before Publish; a QA or Prod
+   VALC fills the row from the release's `<!-- RR-Bundle-Notes -->` block when it imports the bundle.
+
+**Response** (200):
+
+```json
+{ "whatsNew": { "bundleId": 5, "released": "2026-11-20T14:00:00Z",
+                "lines": ["You can export the grid.", "A fixed period total."], "seen": false } }
+```
+
+- `whatsNew` is `null` when there is nothing to show (no bundle, or a bundle without notes).
+- `lines`: one per non-blank line of the notes, a leading `- `, `* ` or `•` taken off. Plain text; Home escapes it.
+- `released`: when the bundle reached this environment (its Prod or QA approval; on Dev, its proposal).
+- `seen`: this user has dismissed this bundle's card. Home shows the card only while it is `false`.
+
+### `POST api/v1/tenant/release-notes/dismiss`
+
+Body `{ "database": "<active db name>", "bundleId": 5 }`. Records that the caller dismissed that bundle's card
+(`release_notes_seen`, V134, one row per user and bundle; a second dismissal is a no-op). Home removes the card only on
+a 200, so a refusal or a network blip leaves it to show again.
+
+| Status | `message` |
+|---|---|
+| 400 | `database and bundleId are required.` |
+| 401 | `Sign in first.` / `Unknown or removed user.` |
+| 403 | `That database is not on your account.` |
+| 409 | `That release is not the one this database runs now. Reload the page.` |
+
+---
+
 ## AI feature levels (VLC-234)
 
 The AI gateway is VALC (`RR_VALC_PREFIXES` carries `api/v1/ai/`); the Anthropic key never reaches the browser.
