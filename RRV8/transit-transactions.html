@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  In Transit Transaction Details  (UI-240)  --  a drill-in of transit.html
+  =============================================================================
+  Reached from In Transit's analyst tab Transaction Variance: a document number,
+  or the "Transaction Details" button above that grid. Inventory's drill-in of the
+  same name (inventory-transactions.html) is the model: a page title, the navy
+  scope band, the period's lines in one grid, and the detail behind a document.
+
+    ?company=90001&period=2025-07-31          the period's lines for one company
+    &doc=7700101&type=OV                      ...and that document's detail open
+
+  Two jobs, the two endpoints transit.html leaves to this page (RRV8/API.md
+  section In Transit; Agent specs/in-transit-transactions.md):
+
+    * Worked and Note on a line. Pick lines, Edit notes, Save: Inventory's
+      batch-edit pattern (GRID-STANDARDS "Inline cell editing" is not specced,
+      so no inline edit). POST in-transit/transactions/save-notes. The note's
+      key is TransitWorkNote's eight columns, PeriodEnds included, so each
+      line is saved under ITS OWN period (saveBodies groups by it).
+    * The document behind a line. POST in-transit/transactions/details
+      {company, doc, type} -- `type`, not `docType`: Jackson drops an unknown
+      key and the procedure would run with a null type. usp6transcompare2
+      returns one rowset in sections keyed by Sort (sectionOf); separators and
+      the section-title rows are dropped, totals become each section's footer.
+
+  Signs. The grid shows v8ui_transit_transactions' stored Variance, which is
+  LEDGER less IN TRANSIT (measured on Demo1 2026-11-22: 54,498 of 54,498 open
+  lines). usp6transcompare2's Variance is IN TRANSIT less LEDGER on every
+  section (it negates the stored figure on its RR row and computes cardex less
+  GL on its totals). Owner 2026-11-22, "Match the grid": gridSign negates the
+  procedure's Variance on every detail row and total, so the detail reads
+  ledger less in transit like the grid, labelled so. The export says so too.
+
+  Gates, mirrored from the server (InTransitModuleGate, InTransitScope):
+    * module   t.it AND m.it on the active database, fail closed.
+    * lane     either In Transit view may read the page; only the analyst lane
+               (perms.dm) edits notes, because Transaction Variance is the
+               analyst's tab. The server checks module and company only.
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>In Transit Transaction Details &mdash; RapidReconciler</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="export-guard.js"></script>
+<!-- sidebar.js: the session (hydrateSession) and the idle and expiry guard, as on every V8 page. -->
+<script src="sidebar.js"></script>
+<script src="vendor/xlsx-js-style.min.js" defer></script>
+<script defer src="../Tools/audit-workbook.js"></script>
+<!-- In Transit's grids, cards, notice bar and toast are Home's (home-frame.css), as on transit.html. -->
+<link href="home-frame.css" rel="stylesheet">
+<link rel="stylesheet" href="../Tools/help-sidebar.css">
+<script defer src="../Tools/help-sidebar.js"></script>
+<style>
+  /* This page only. Every class starts tt- so none can collide with home-frame.css. */
+  [hidden] { display: none !important; }
+  body { background: #fafbfd; }
+  .tt-page { max-width: 1340px; margin: 0 auto; padding: 16px 28px 64px; }
+  .tt-title { font-family: 'Source Sans 3', sans-serif; font-size: 32px; font-weight: 800; letter-spacing: -0.01em; color: var(--navy); margin: 0 0 14px; }
+
+  /* The scope band: the V8 standard (navy left accent, 12.5px labels, 19px values, 24px total). */
+  .tt-scope { display: flex; align-items: center; gap: 16px 34px; flex-wrap: wrap; margin: 0 0 18px; padding: 18px 24px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 4px solid var(--navy); border-radius: 12px; box-shadow: var(--shadow-sm); }
+  .tt-scope-items { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 34px; flex: 1; min-width: 0; }
+  .tt-scope-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .tt-scope-k { font-size: 12.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+  .tt-scope-v { font-family: 'Source Sans 3', sans-serif; font-size: 19px; font-weight: 800; color: var(--navy); }
+  .tt-scope-v.is-neg { color: var(--red); }
+  .tt-scope-total { margin-left: auto; padding-left: 22px; border-left: 1px solid var(--rule); align-items: flex-end; text-align: right; }
+  .tt-scope-total .tt-scope-v { font-size: 24px; }
+  .tt-scope > .topbar-help { flex-shrink: 0; }
+
+  .tt-lede { margin: 0 0 16px; padding-left: 20px; font-size: 15px; line-height: 1.6; color: var(--text); }
+  .tt-lede b { color: var(--navy); }
+  .tt-block { margin-bottom: 18px; }
+
+  /* Grid pieces home-frame.css has not (the .acct-snapshot / .perp-* rules are Home's). */
+  .tt-grid .perp-grid-wrap { max-height: 520px; }
+  .tt-grid .perp-grid td .tt-muted { color: var(--text-muted); }
+  .tt-grid .perp-grid td .tt-mono, .tt-detail .perp-grid td .tt-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .tt-grid .perp-grid td .tt-acct { font-weight: 700; color: var(--navy); }
+  .tt-grid .perp-grid td.tt-note { white-space: nowrap; min-width: 200px; }
+  .tt-grid .perp-grid th.tt-sel, .tt-grid .perp-grid td.tt-sel { width: 28px; }
+  .tt-grid .perp-grid tbody tr:hover td { background: rgba(31,45,74,0.03); }
+  .tt-grid .perp-grid tbody tr.is-picked td { background: var(--blue-pale); }
+  .tt-grid .perp-grid tbody tr.is-open td { box-shadow: inset 0 -2px 0 var(--blue); }
+  .tt-pick, .tt-pick-all { width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; }
+  .tt-doc { appearance: none; border: 0; background: none; padding: 0; font: inherit; font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 700; color: var(--blue); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .tt-doc:hover { color: var(--navy); }
+  .tt-empty { padding: 34px 20px; text-align: center; color: var(--text-muted); font-style: italic; white-space: normal; font-size: 14px; }
+  .tt-empty.is-err { color: var(--red); font-style: normal; }
+  .tt-chip { display: inline-flex; align-items: center; font-weight: 700; font-size: 11.5px; padding: 2px 9px; border-radius: 100px; background: var(--green-pale); color: var(--green); }
+  .tt-btn.is-on { background: var(--navy); border-color: var(--navy); color: #fff; }
+  .tt-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* The document detail: one card, one table per section. */
+  .tt-detail-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .tt-detail-title { font-family: 'Source Sans 3', sans-serif; font-size: 20px; font-weight: 800; color: var(--navy); }
+  .tt-detail-sub { font-size: 15px; color: var(--text-muted); flex: 1; min-width: 220px; }
+  .tt-sec { margin-top: 16px; }
+  .tt-sec-title { font-family: 'Source Sans 3', sans-serif; font-size: 16px; font-weight: 800; color: var(--navy); margin: 0 0 4px; }
+  .tt-sec-desc { font-size: 14.5px; color: var(--text-muted); margin: 0 0 8px; }
+  .tt-detail .perp-grid-wrap { max-height: none; }
+  .tt-detail .perp-grid tfoot td { font-weight: 800; color: var(--navy); background: var(--bg-soft); border-top: 2px solid var(--rule-strong); padding: 7px 6px; white-space: nowrap; }
+  .tt-detail .perp-grid tfoot td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tt-detail .perp-grid td .neg, .tt-detail .perp-grid tfoot .neg { color: var(--red); }
+
+  /* Edit notes modal */
+  .tt-modal-backdrop { position: fixed; inset: 0; background: rgba(20,32,55,.42); display: none; align-items: center; justify-content: center; padding: 24px; z-index: 120; }
+  .tt-modal-backdrop.is-open { display: flex; }
+  .tt-modal { background: var(--bg-card); border: 1px solid var(--rule); border-radius: 14px; box-shadow: var(--shadow-md); width: 100%; max-width: 560px; overflow: hidden; }
+  .tt-modal-head { padding: 16px 20px; border-bottom: 1px solid var(--rule); font-weight: 800; font-size: 17px; color: var(--navy); }
+  .tt-modal-body { padding: 18px 20px; font-size: 15px; color: var(--text); line-height: 1.6; }
+  .tt-modal-body label { display: flex; align-items: center; gap: 9px; margin-top: 12px; font-weight: 700; color: var(--navy); }
+  .tt-modal-body textarea { width: 100%; margin-top: 8px; border: 1px solid var(--rule-strong); border-radius: 8px; padding: 8px 10px; font-family: inherit; font-size: 14.5px; resize: vertical; min-height: 84px; }
+  .tt-modal-body input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--blue); }
+  .tt-modal-hint { margin-top: 8px; font-size: 14px; color: var(--text-muted); }
+  .tt-modal-err { color: var(--red); font-size: 14px; font-weight: 600; margin-top: 8px; }
+  .tt-modal-err:empty { display: none; }
+  .tt-modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--rule); background: var(--bg-soft); }
+  .tt-modal-btn { font-weight: 700; font-size: 14px; border-radius: 8px; padding: 9px 18px; cursor: pointer; border: 1px solid var(--rule-strong); background: var(--bg-card); color: var(--text); font-family: inherit; }
+  .tt-modal-btn.is-primary { color: #fff; background: var(--navy); border-color: var(--navy); }
+  .tt-modal-btn:disabled { opacity: .5; cursor: not-allowed; }
+</style>
+</head>
+<body data-help-src="../RRUniversity/transfer-order-reconcile.html" data-help-title="In Transit Transaction Details" data-help-glossary="transit">
+
+<div class="tt-page">
+  <h1 class="tt-title">In Transit Transaction Details</h1>
+
+  <!-- The help "?" mounts here ([data-help-host]); paintScope() rewrites #ttScopeItems only, so it survives (UI-250). -->
+  <section class="tt-scope" id="ttScope" aria-label="Report parameters" data-help-host>
+    <div class="tt-scope-items" id="ttScopeItems">
+      <span class="tt-scope-item"><span class="tt-scope-k">Database</span><span class="tt-scope-v" id="ttDb">&mdash;</span></span>
+    </div>
+  </section>
+
+  <!-- A gate, a missing parameter or a failed read: Home's notice bar. -->
+  <div class="home-notice" id="ttNotice" role="status" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span id="ttNoticeText"></span>
+  </div>
+
+  <div id="ttWork" hidden>
+    <ul class="tt-lede">
+      <li>Every transfer document line in the period, with what it moved through in transit against what it posted to the ledger.</li>
+      <li id="ttLedeEdit">Pick the lines you have looked into, then <b>Edit notes</b> to mark them worked and say why.</li>
+      <li>Click a document number to see what is behind it: the in-transit lines, the GL lines, the compare and the AAIs.</li>
+    </ul>
+    <div class="tt-block" id="ttGrid"></div>
+
+    <section class="acct-snapshot tt-detail" id="ttDetail" hidden aria-label="Document detail">
+      <div class="tt-detail-head">
+        <span class="tt-detail-title" id="ttDetailTitle">Document</span>
+        <span class="tt-detail-sub" id="ttDetailSub"></span>
+        <button class="perp-xlsx" type="button" id="ttDetailXlsx" title="Download this document's detail to Excel" disabled>Excel</button>
+        <button class="perp-xlsx" type="button" id="ttDetailClose">Close</button>
+      </div>
+      <div id="ttDetailBody"></div>
+    </section>
+  </div>
+</div>
+
+<div class="tt-modal-backdrop" id="ttModal" role="dialog" aria-modal="true" aria-labelledby="ttModalTitle">
+  <div class="tt-modal">
+    <div class="tt-modal-head" id="ttModalTitle">Edit notes</div>
+    <div class="tt-modal-body">
+      <div id="ttModalDesc"></div>
+      <label><input type="checkbox" id="ttModalWorked"> Worked</label>
+      <label for="ttModalNote">Note</label>
+      <textarea id="ttModalNote" placeholder="What you found, and what was done about it"></textarea>
+      <div class="tt-modal-hint" id="ttModalHint" hidden>The lines you picked carry different notes. Saving gives them all this one.</div>
+      <div class="tt-modal-err" id="ttModalErr" role="alert"></div>
+    </div>
+    <div class="tt-modal-foot">
+      <button class="tt-modal-btn" id="ttModalCancel" type="button">Cancel</button>
+      <button class="tt-modal-btn is-primary" id="ttModalSave" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------------
+  //  Routing: transit.html's rrFetch, agent half only. Every call here is under
+  //  in-transit/, which config.js routes to the active database's data
+  //  services (RR_TEST_AGENT_PREFIXES). The local fallback covers a config.js
+  //  that failed to load.
+  // ---------------------------------------------------------------------------
+  function prodHeaders(contentType) {
+    var h = { 'Accept': 'application/json' };
+    var tok = (window.RR_SESSION && window.RR_SESSION.token) || null;
+    if (!tok) { try { tok = localStorage.getItem('rrv8.token'); } catch (_) {} }
+    if (tok) h['Authorization'] = 'Bearer ' + tok;
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  var _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || []);
+  var _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/', 'in-transit/'];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (var i = 0; i < _testAgentPrefixes.length; i++) if (area.indexOf(_testAgentPrefixes[i]) === 0) return true;
+    return false;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (!_routesToTestAgent(area)) return Promise.reject(new Error('This page has no route for ' + area + '.'));
+    var base = window.RRDB && window.RRDB.agentBase();
+    if (!base) return Promise.reject(new Error('No active database. Sign in again from the hub.'));
+    var url = base + '/' + area;
+    return fetch(url, {
+      method: opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      if (!r.ok) return window.RRDB.responseError(r, url).then(function (e) { throw e; });
+      // save-notes answers 204 with no body.
+      return r.status === 204 ? null : r.json().catch(function (e) { if (e instanceof SyntaxError) return null; throw e; });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Small helpers (transit.html's, so the two pages format alike)
+  // ---------------------------------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]; }); }
+  function trim(s) { return String(s == null ? '' : s).trim(); }
+  function num(v) { var x = Number(v); return isFinite(x) ? x : 0; }
+  function money(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return x < 0 ? '(' + a + ')' : a; }
+  function qty(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { maximumFractionDigits: 4 }); return x < 0 ? '(' + a + ')' : a; }
+  function cost(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }); return x < 0 ? '(' + a + ')' : a; }
+  function sym(code) {
+    var c = trim(code).toUpperCase(); if (!c) return '';
+    try { var parts = new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).formatToParts(0); for (var i = 0; i < parts.length; i++) if (parts[i].type === 'currency') return parts[i].value; } catch (_) {}
+    return c + ' ';
+  }
+  function curMoney(n, code) { var x = num(n); var a = sym(code) + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return x < 0 ? '(' + a + ')' : a; }
+  function moneyCell(n) { var x = num(n); if (Math.abs(x) < 0.005) return '<span class="tt-muted">&mdash;</span>'; return '<span class="' + (x < 0 ? 'neg' : '') + '">' + money(x) + '</span>'; }
+  function isoDay(v) { var s = trim(v); return s.length >= 10 ? s.slice(0, 10) : s; }
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fmtDate(v) { var s = isoDay(v); var p = s.split('-'); if (p.length !== 3 || !MON[(+p[1]) - 1]) return s; return MON[(+p[1]) - 1] + ' ' + (+p[2]) + ', ' + p[0]; }
+  function toast(m) { var t = $('toast'); if (!t) return; t.textContent = m; t.classList.add('is-visible'); clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove('is-visible'); }, 3600); }
+  function errText(e) { return (e && (e.serverMessage || e.message)) || String(e); }
+  function dbShortName(n) { n = String(n || ''); return n.replace(/^RapidReconciler_/, '') || n; }   // Home's display rule
+  // A JSON value the procedure returns as text (Qty, Cost: nchar on the wire) or as a number.
+  function numOrNull(v) { if (v == null || trim(v) === '') return null; var x = Number(trim(v)); return isFinite(x) ? x : null; }
+
+  // ---------------------------------------------------------------------------
+  //  Gates: transit.html's, so the module test is the server's (t.it AND m.it).
+  // ---------------------------------------------------------------------------
+  function activeDb() { return (window.RRDB && window.RRDB.active && window.RRDB.active()) || {}; }
+  function hasToken() { try { return !!localStorage.getItem('rrv8.token'); } catch (_) { return false; } }
+  function hasModule() { var a = activeDb(); return !!(a.m && a.m.it === true && a.t && a.t.it === true); }
+  function perms() { return activeDb().perms || {}; }
+  function canAccountant() { return perms().ac === true; }
+  function canAnalyst() { return perms().dm === true; }
+  function canEditNotes() { return canAnalyst(); }
+  function dbName() { return trim(activeDb().n) || 'this database'; }
+
+  // ---------------------------------------------------------------------------
+  //  The request and note shapes. Pinned by Tools/test-transit-drillins.js.
+  // ---------------------------------------------------------------------------
+  // POST in-transit/transactions/details. `type`, not `docType` (TransactionDetailsRequest); doc is an int there.
+  function detailsBody(r) {
+    return { company: trim(r.CompanyNumber), doc: Number(r.DocNumber), type: trim(r.DT) };
+  }
+  // A line's note key: TransitWorkNote's primary key, the columns v8ui_transit_transactions joins the note on.
+  function noteKey(r) {
+    return [isoDay(r.PeriodEnds), trim(r.CompanyNumber), trim(r.Batch), trim(r.LongAccount), trim(r.DT), trim(r.DocNumber), trim(r.OT), trim(r.OrderNumber)].join('|');
+  }
+  // One TransitNote (the Agent's bean: batchNumber, docNumber and orderNumber are int; the grid row's Batch is batchNumber).
+  function transitNote(r, worked, note) {
+    return { companyNumber: trim(r.CompanyNumber), longAccount: trim(r.LongAccount), batchNumber: Number(r.Batch),
+             docType: trim(r.DT), docNumber: Number(r.DocNumber), orderType: trim(r.OT), orderNumber: Number(r.OrderNumber),
+             worked: !!worked, note: String(note == null ? '' : note).trim() };
+  }
+  // The save-notes bodies for these lines: one per period, because PeriodEnds is part of the note's key and the
+  // request carries one period for all its notes. Every line is saved under its own period.
+  function saveBodies(rows, worked, note) {
+    var by = {}, order = [];
+    rows.forEach(function (r) {
+      var p = isoDay(r.PeriodEnds);
+      if (!by[p]) { by[p] = []; order.push(p); }
+      by[p].push(transitNote(r, worked, note));
+    });
+    return order.map(function (p) { return { period: p, notes: by[p] }; });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  usp6transcompare2's sections. Sort codes, from the procedure:
+  //    001 / 002  the in-transit (cardex) lines / their total ('1-RTrnDet', '1-RTrnDetT')
+  //    003 / 004  the F0911 lines on in-transit accounts / their total
+  //    006        the compare ('3-RapRec') and its total ('3-RapRecT')
+  //    008        the sales order line (F42119), 010 the purchase receipt (F43121)
+  //    014...     the AAI rows for the document's GL classes; a row with no Source is a spacer
+  //    002a, 005, 007, 009, 011, 012   blank spacers and the 'DMAAIs' title: dropped
+  // ---------------------------------------------------------------------------
+  var SECTIONS = [
+    { id: 'transit', title: 'In transit', desc: 'The item ledger lines on in-transit accounts: what the document moved into or out of transit.',
+      cols: [['Company', 'Co'], ['Period', 'Period', 'date'], ['Account', 'Account'], ['TransDate', 'Date', 'date'], ['GLDate', 'GL date', 'date'], ['GLClass', 'GL class'], ['Batch', 'Batch'], ['DT', 'Doc type'], ['Doc', 'Doc'], ['OT', 'Order type'], ['OrderNum', 'Order'], ['Line', 'Line', 'qty'], ['Branch', 'Branch'], ['Item', 'Item'], ['Lot', 'Lot'], ['Qty', 'Quantity', 'qty'], ['UM', 'UOM'], ['Cost', 'Unit cost', 'cost'], ['CalcTrCost', 'Transfer cost', 'cost'], ['CalcPrice', 'Price', 'cost'], ['TransitAmount', 'In transit', 'money'], ['LedgerAmount', 'Ledger', 'money'], ['Variance', 'Ledger less in transit', 'money']] },
+    { id: 'gl', title: 'General ledger', desc: 'The F0911 lines the document posted to in-transit accounts.',
+      cols: [['Company', 'Co'], ['Period', 'Period', 'date'], ['Account', 'Account'], ['TransDate', 'Batch date', 'date'], ['GLDate', 'GL date', 'date'], ['Batch', 'Batch'], ['BT', 'Batch type'], ['DT', 'Doc type'], ['Doc', 'Doc'], ['OT', 'Order type'], ['OrderNum', 'Order'], ['Line', 'Line', 'qty'], ['Ext', 'Line ext'], ['TransitAmount', 'In transit', 'money'], ['LedgerAmount', 'Ledger', 'money'], ['Variance', 'Ledger less in transit', 'money'], ['Comment', 'Explanation']] },
+    { id: 'rr', title: 'Compare', desc: 'How RapidReconciler matched the two, by batch and order.',
+      cols: [['Company', 'Co'], ['Period', 'Period', 'date'], ['Account', 'Account'], ['Batch', 'Batch'], ['DT', 'Doc type'], ['Doc', 'Doc'], ['OT', 'Order type'], ['OrderNum', 'Order'], ['TransitAmount', 'In transit', 'money'], ['LedgerAmount', 'Ledger', 'money'], ['Variance', 'Ledger less in transit', 'money'], ['Comment', 'Comment']] },
+    { id: 'so', title: 'Sales order detail', desc: 'The transfer’s shipping side, from the sales order line.',
+      cols: [['Company', 'Co'], ['TransDate', 'Date', 'date'], ['GLDate', 'GL date', 'date'], ['GLClass', 'GL class'], ['DT', 'Doc type'], ['Doc', 'Doc'], ['OT', 'Order type'], ['OrderNum', 'Order'], ['Line', 'Line', 'qty'], ['Ext', 'Line type'], ['Branch', 'Branch'], ['Item', 'Item'], ['Location', 'Location'], ['Lot', 'Lot'], ['Qty', 'Quantity', 'qty'], ['UM', 'UOM'], ['Cost', 'Unit cost', 'cost'], ['TransitAmount', 'Extended cost', 'money']] },
+    { id: 'pr', title: 'Purchase receipt detail', desc: 'The transfer’s receiving side, from the receipt line.',
+      cols: [['Company', 'Co'], ['TransDate', 'Date', 'date'], ['GLDate', 'GL date', 'date'], ['GLClass', 'GL class'], ['DT', 'Doc type'], ['Doc', 'Doc'], ['OT', 'Order type'], ['OrderNum', 'Order'], ['Line', 'Line', 'qty'], ['Ext', 'Line type'], ['Branch', 'Branch'], ['Item', 'Item'], ['Location', 'Location'], ['Lot', 'Lot'], ['Qty', 'Quantity', 'qty'], ['UM', 'UOM'], ['Cost', 'Unit cost', 'cost'], ['TransitAmount', 'Amount received', 'money'], ['Comment', 'Comment']] },
+    { id: 'aai', title: 'DMAAIs', desc: 'The AAI rows behind the document’s GL classes and document types. * marks the inventory model (4152).',
+      cols: [['Company', 'Co'], ['Period', 'AAI'], ['Source', 'Table'], ['Account', 'Account'], ['GLClass', 'GL class'], ['DT', 'Doc type'], ['OT', 'Order type'], ['TransDate', 'Flex']] }
+  ];
+  // [section id, 'row' | 'total'] for one procedure row, or null for a spacer or title row.
+  function sectionOf(r) {
+    var s = trim(r.Sort), src = trim(r.Source);
+    if (s === '001') return ['transit', 'row'];
+    if (s === '002') return ['transit', 'total'];
+    if (s === '003') return ['gl', 'row'];
+    if (s === '004') return ['gl', 'total'];
+    if (s === '006') return src === '3-RapRecT' ? ['rr', 'total'] : (src ? ['rr', 'row'] : null);
+    if (s === '008') return ['so', 'row'];
+    if (s === '010') return ['pr', 'row'];
+    if (s.indexOf('014') === 0) return src ? ['aai', 'row'] : null;
+    return null;
+  }
+  // The procedure's Variance is in transit less ledger; the grid's is ledger less in transit. Owner 2026-11-22:
+  // "Match the grid", so the detail shows the grid's sign. A copy, so the procedure's row is never changed.
+  function gridSign(r) {
+    var v = numOrNull(r.Variance); if (v == null) return r;
+    var c = {}; Object.keys(r).forEach(function (k) { c[k] = r[k]; });
+    c.Variance = v === 0 ? 0 : -v;
+    return c;
+  }
+  // The sections with rows, in SECTIONS order: [{ id, title, desc, cols, rows, total }].
+  function sectionsOf(rows) {
+    var by = {};
+    (rows || []).forEach(function (r0) {
+      var r = gridSign(r0);
+      var at = sectionOf(r); if (!at) return;
+      var b = by[at[0]] || (by[at[0]] = { rows: [], total: null });
+      if (at[1] === 'total') b.total = r; else b.rows.push(r);
+    });
+    return SECTIONS.filter(function (s) { return by[s.id] && by[s.id].rows.length; })
+      .map(function (s) { return { id: s.id, title: s.title, desc: s.desc, cols: s.cols, rows: by[s.id].rows, total: by[s.id].total }; });
+  }
+  // The section's columns that carry something: a column empty on every row (and its total) is noise.
+  function liveCols(sec) {
+    var all = sec.rows.concat(sec.total ? [sec.total] : []);
+    return sec.cols.filter(function (c) { return all.some(function (r) { return trim(r[c[0]]) !== ''; }); });
+  }
+  function cellHtml(c, v) {
+    var k = c[2];
+    if (k === 'money') { var m = numOrNull(v); return m == null ? '' : moneyCell(m); }
+    if (k === 'qty')   { var q = numOrNull(v); return q == null ? '' : '<span class="' + (q < 0 ? 'neg' : '') + '">' + qty(q) + '</span>'; }
+    if (k === 'cost')  { var u = numOrNull(v); return u == null ? '' : '<span class="' + (u < 0 ? 'neg' : '') + '">' + cost(u) + '</span>'; }
+    if (k === 'date')  return esc(/^\d{4}-\d{2}-\d{2}/.test(trim(v)) ? fmtDate(v) : trim(v));
+    return esc(trim(v));
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Page state
+  // ---------------------------------------------------------------------------
+  var S = { company: '', period: '', rows: [], currency: '', q: '', onlyVar: true, sort: { k: 'Variance', dir: 'desc' }, picked: {}, openKey: '', detail: null, detailRow: null };
+
+  // The grid's columns (transit.html's Transaction Variance columns, with Worked as a chip and the doc as the drill).
+  function col(k, label, o) { o = o || {}; o.k = k; o.label = label; return o; }
+  var COLS = [
+    col('LongAccount', 'Account', { get: function (r) { return trim(r.LongAccount); }, render: function (r) { return '<span class="tt-mono tt-acct">' + esc(trim(r.LongAccount)) + '</span>'; } }),
+    col('OT', 'Order type'), col('OrderNumber', 'Order', { mono: true }), col('RelType', 'Rel type'), col('RelOrder', 'Rel order', { mono: true }),
+    col('DT', 'Doc type'),
+    col('DocNumber', 'Doc', { render: function (r) { return '<button type="button" class="tt-doc" data-open="' + esc(noteKey(r)) + '" title="Open this document’s detail">' + esc(trim(r.DocNumber)) + '</button>'; } }),
+    col('Batch', 'Batch', { mono: true }),
+    col('TransDate', 'Date', { get: function (r) { return isoDay(r.TransDate); }, render: function (r) { return esc(fmtDate(r.TransDate)); } }),
+    col('TransitAmount', 'In transit', { num: true }), col('LedgerAmount', 'Ledger', { num: true }),
+    col('Variance', 'Variance', { num: true, sortVal: function (r) { return Math.abs(num(r.Variance)); } }),
+    col('Comment', 'Comment'),
+    col('Worked', 'Worked', { get: function (r) { return r.Worked ? 'Yes' : ''; }, render: function (r) { return r.Worked ? '<span class="tt-chip">Worked</span>' : ''; } }),
+    col('Note', 'Note', { cls: 'tt-note' })
+  ];
+  function text(c, r) { var v = c.get ? c.get(r) : r[c.k]; return v == null ? '' : String(v).trim(); }
+  function colOf(k) { for (var i = 0; i < COLS.length; i++) if (COLS[i].k === k) return COLS[i]; return {}; }
+  function visible() {
+    var q = trim(S.q).toLowerCase(), anchor = false;
+    if (q.charAt(0) === '^') { anchor = true; q = q.slice(1); }
+    var out = S.rows.filter(function (r) {
+      if (S.onlyVar && Math.abs(num(r.Variance)) < 0.005) return false;
+      if (!q) return true;
+      for (var i = 0; i < COLS.length; i++) { var t = text(COLS[i], r).toLowerCase(); if (anchor ? t.indexOf(q) === 0 : t.indexOf(q) >= 0) return true; }
+      return false;
+    });
+    if (S.sort) {
+      var c = colOf(S.sort.k), d = S.sort.dir === 'asc' ? 1 : -1;
+      out.sort(function (a, b) {
+        if (c.num) return ((c.sortVal ? c.sortVal(a) : num(a[c.k])) - (c.sortVal ? c.sortVal(b) : num(b[c.k]))) * d;
+        return text(c, a).localeCompare(text(c, b), undefined, { numeric: true, sensitivity: 'base' }) * d;
+      });
+    }
+    return out;
+  }
+  function pickedRows() { return Object.keys(S.picked).map(function (k) { return S.picked[k]; }); }
+
+  function gridShell() {
+    $('ttGrid').innerHTML =
+      '<div class="acct-snapshot tt-grid">' +
+        '<div class="acct-snap-headline"><span class="acct-snap-title">Transaction variance</span></div>' +
+        '<div class="perp-resid">' +
+          '<button class="perp-xlsx tt-btn is-on" type="button" id="ttOnlyVar" title="Show only lines with a variance">Variances only</button>' +
+          '<button class="perp-xlsx tt-btn" type="button" id="ttEdit" disabled title="Mark the picked lines worked and give them a note">Edit notes</button>' +
+          '<input class="perp-search" id="ttSearch" type="search" placeholder="Search&hellip;" autocomplete="off" aria-label="Search the lines">' +
+          '<button class="perp-xlsx" type="button" id="ttXlsx" title="Export what is shown to Excel">Excel</button>' +
+          '<span class="perp-resid-count" id="ttCount">&mdash;</span>' +
+          '<span class="perp-amt-total" id="ttTotals"></span>' +
+        '</div>' +
+        '<div class="perp-grid-wrap"><table class="perp-grid"><thead id="ttHead"></thead><tbody id="ttBody"><tr><td class="tt-empty">Loading&hellip;</td></tr></tbody></table></div>' +
+      '</div>';
+    $('ttEdit').hidden = !canEditNotes();
+    var t;
+    $('ttSearch').addEventListener('input', function (e) { clearTimeout(t); var v = e.target.value; t = setTimeout(function () { S.q = v; renderGrid(); }, 150); });
+    $('ttOnlyVar').addEventListener('click', function () { S.onlyVar = !S.onlyVar; this.classList.toggle('is-on', S.onlyVar); renderGrid(); });
+    $('ttXlsx').addEventListener('click', exportGrid);
+    $('ttEdit').addEventListener('click', openModal);
+    $('ttHead').addEventListener('click', function (e) {
+      var th = e.target.closest('th[data-sort]');
+      if (th) {
+        var k = th.getAttribute('data-sort');
+        S.sort = (S.sort && S.sort.k === k) ? { k: k, dir: S.sort.dir === 'asc' ? 'desc' : 'asc' } : { k: k, dir: colOf(k).num ? 'desc' : 'asc' };
+        renderGrid(); return;
+      }
+      if (e.target.matches('input.tt-pick-all')) { var on = e.target.checked; visible().forEach(function (r) { var id = noteKey(r); if (on) S.picked[id] = r; else delete S.picked[id]; }); renderGrid(); }
+    });
+    $('ttBody').addEventListener('change', function (e) {
+      if (!e.target.matches('input.tt-pick')) return;
+      var id = e.target.getAttribute('data-id'), r = byKey(id);
+      if (e.target.checked && r) S.picked[id] = r; else delete S.picked[id];
+      e.target.closest('tr').classList.toggle('is-picked', e.target.checked);
+      syncEdit();
+    });
+    $('ttBody').addEventListener('click', function (e) {
+      var b = e.target.closest('button.tt-doc'); if (!b) return;
+      var r = byKey(b.getAttribute('data-open')); if (r) openDoc(r, true);
+    });
+  }
+  function byKey(id) { for (var i = 0; i < S.rows.length; i++) if (noteKey(S.rows[i]) === id) return S.rows[i]; return null; }
+  function syncEdit() { var n = pickedRows().length, b = $('ttEdit'); if (!b) return; b.disabled = !n; b.textContent = n ? 'Edit notes (' + n + ')' : 'Edit notes'; }
+
+  function renderGrid() {
+    var sel = canEditNotes(), vis = visible();
+    $('ttHead').innerHTML = '<tr>' + (sel ? '<th class="tt-sel"><input type="checkbox" class="tt-pick-all" aria-label="Pick every line shown"></th>' : '') +
+      COLS.map(function (c) {
+        var on = S.sort && S.sort.k === c.k;
+        return '<th data-sort="' + esc(c.k) + '"' + (c.num ? ' class="num"' : '') + ' title="Sort by ' + esc(c.label) + '">' + esc(c.label) +
+          (on ? '<span class="perp-sort-arrow">' + (S.sort.dir === 'asc' ? '&#9650;' : '&#9660;') + '</span>' : '') + '</th>';
+      }).join('') + '</tr>';
+    var span = COLS.length + (sel ? 1 : 0);
+    $('ttCount').textContent = vis.length.toLocaleString() + (vis.length === S.rows.length ? '' : ' of ' + S.rows.length.toLocaleString()) + (S.rows.length === 1 ? ' line' : ' lines');
+    var tot = vis.reduce(function (a, r) { a.t += num(r.TransitAmount); a.l += num(r.LedgerAmount); a.v += num(r.Variance); return a; }, { t: 0, l: 0, v: 0 });
+    $('ttTotals').innerHTML = vis.length ? '<span class="perp-amt-label">Variance of lines shown</span><span class="perp-amt-val">' + esc(curMoney(tot.v, S.currency)) + '</span>' : '';
+    if (!vis.length) {
+      $('ttBody').innerHTML = '<tr><td class="tt-empty" colspan="' + span + '">' + esc(S.rows.length ? (trim(S.q) ? 'No lines match.' : 'No line in this period has a variance. Turn off Variances only to see them all.') : 'No transfer document lines in this period.') + '</td></tr>';
+      syncEdit(); return;
+    }
+    var cap = 2000;
+    $('ttBody').innerHTML = vis.slice(0, cap).map(function (r) {
+      var id = noteKey(r), on = !!S.picked[id];
+      return '<tr class="' + (on ? 'is-picked' : '') + (id === S.openKey ? ' is-open' : '') + '">' +
+        (sel ? '<td class="tt-sel"><input type="checkbox" class="tt-pick" data-id="' + esc(id) + '"' + (on ? ' checked' : '') + ' aria-label="Pick this line"></td>' : '') +
+        COLS.map(function (c) {
+          var body = c.render ? c.render(r) : (c.num ? moneyCell(r[c.k]) : (c.mono ? '<span class="tt-mono">' + esc(text(c, r)) + '</span>' : esc(text(c, r))));
+          return '<td' + (c.num ? ' class="num"' : (c.cls ? ' class="' + c.cls + '"' : '')) + '>' + body + '</td>';
+        }).join('') + '</tr>';
+    }).join('') + (vis.length > cap ? '<tr><td class="tt-empty" colspan="' + span + '">Showing the first ' + cap.toLocaleString() + ' of ' + vis.length.toLocaleString() + ' lines. Search to narrow them, or export to Excel for all of them.</td></tr>' : '');
+    syncEdit();
+  }
+
+  // The lines shown, to Excel: the shared audit template (title block, labelled columns, formats, a total row).
+  function exportGrid() {
+    RRV8.runExport('Transaction variance', toast, function () {
+      if (typeof XLSX === 'undefined' || typeof window.buildAuditSheet !== 'function') { toast('The Excel library has not loaded yet. Try again in a moment.'); return; }
+      var vis = visible();
+      if (!vis.length) { toast('No lines are shown, so there is nothing to export.'); return; }
+      var cols = COLS.map(function (c) { return { label: c.label + (c.num && S.currency ? ' (' + S.currency + ')' : ''), num: !!c.num }; });
+      var rows = vis.map(function (r) { return COLS.map(function (c) { return c.num ? num(r[c.k]) : (c.k === 'TransDate' ? isoDay(r.TransDate) : text(c, r)); }); });
+      var total = COLS.map(function (c, i) {
+        if (i === 0) return 'Total of ' + vis.length.toLocaleString() + (vis.length === 1 ? ' line' : ' lines');
+        return c.num ? vis.reduce(function (a, r) { return a + num(r[c.k]); }, 0) : '';
+      });
+      var ws = window.buildAuditSheet({ columns: cols, rows: rows, totalRow: total, titleLines: [
+        'In Transit transaction variance',
+        'Company ' + S.company + ' · period ending ' + fmtDate(S.period) + ' · ' + dbShortName(dbName()),
+        (S.onlyVar ? 'Lines with a variance' : 'Every line') + (trim(S.q) ? ', matching “' + trim(S.q) + '”' : '') + ' · variance is ledger less in transit, as stored',
+        'Generated ' + new Date().toLocaleString()
+      ] });
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Transaction variance');
+      RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'InTransit-TransactionVariance', company: S.company, period: S.period }), toast, 'Transaction variance');
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Edit notes: Inventory's batch edit. Worked and one note for every picked line.
+  // ---------------------------------------------------------------------------
+  function openModal() {
+    var rows = pickedRows(); if (!rows.length || !canEditNotes()) return;
+    var notes = rows.map(function (r) { return trim(r.Note); });
+    var same = notes.every(function (n) { return n === notes[0]; });
+    $('ttModalDesc').textContent = rows.length === 1
+      ? 'Document ' + trim(rows[0].DT) + ' ' + trim(rows[0].DocNumber) + ', order ' + trim(rows[0].OT) + ' ' + trim(rows[0].OrderNumber) + '.'
+      : rows.length + ' lines.';
+    $('ttModalWorked').checked = rows.every(function (r) { return !!r.Worked; });
+    $('ttModalNote').value = same ? notes[0] : '';
+    $('ttModalHint').hidden = same;
+    $('ttModalErr').textContent = '';
+    $('ttModalSave').disabled = false;
+    $('ttModal').classList.add('is-open');
+    $('ttModalNote').focus();
+  }
+  function closeModal() { $('ttModal').classList.remove('is-open'); }
+  function saveModal() {
+    var rows = pickedRows(); if (!rows.length) { closeModal(); return; }
+    var worked = $('ttModalWorked').checked, note = $('ttModalNote').value;
+    var bodies = saveBodies(rows, worked, note);
+    $('ttModalSave').disabled = true; $('ttModalErr').textContent = '';
+    // One request per period (all one period when opened from transit.html); each is one transaction on the Agent.
+    bodies.reduce(function (p, b) { return p.then(function () { return rrFetch('in-transit/transactions/save-notes', { method: 'POST', body: b }); }); }, Promise.resolve())
+      .then(function () {
+        rows.forEach(function (r) { r.Worked = worked; r.Note = String(note).trim(); });
+        S.picked = {};
+        closeModal(); renderGrid();
+        toast('Saved ' + (rows.length === 1 ? 'the note on 1 line.' : 'notes on ' + rows.length + ' lines.'));
+      })
+      .catch(function (e) { $('ttModalErr').textContent = 'The notes were not saved: ' + errText(e); $('ttModalSave').disabled = false; });
+  }
+  $('ttModalCancel').addEventListener('click', closeModal);
+  $('ttModalSave').addEventListener('click', saveModal);
+  $('ttModal').addEventListener('click', function (e) { if (e.target === $('ttModal')) closeModal(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('ttModal').classList.contains('is-open')) closeModal(); });
+
+  // ---------------------------------------------------------------------------
+  //  The document behind a line
+  // ---------------------------------------------------------------------------
+  function openDoc(r, scroll) {
+    var key = noteKey(r);
+    S.openKey = key; S.detail = null; S.detailRow = r;
+    renderGrid();
+    $('ttDetail').hidden = false;
+    $('ttDetailXlsx').disabled = true;
+    $('ttDetailTitle').textContent = 'Document ' + trim(r.DT) + ' ' + trim(r.DocNumber);
+    $('ttDetailSub').textContent = 'Order ' + trim(r.OT) + ' ' + trim(r.OrderNumber) + ' · company ' + trim(r.CompanyNumber);
+    $('ttDetailBody').innerHTML = '<div class="tt-empty">Reading the document&hellip;</div>';
+    try { var u = new URL(location.href); u.searchParams.set('doc', trim(r.DocNumber)); u.searchParams.set('type', trim(r.DT)); history.replaceState(null, '', u); } catch (_) {}
+    if (scroll) $('ttDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    rrFetch('in-transit/transactions/details', { method: 'POST', body: detailsBody(r) }).then(function (rows) {
+      if (S.openKey !== key) return;
+      if (!Array.isArray(rows)) throw new Error('the data service returned a response this page could not read');
+      S.detail = sectionsOf(rows);
+      renderDetail();
+    }).catch(function (e) {
+      if (S.openKey !== key) return;
+      $('ttDetailBody').innerHTML = '<div class="tt-empty is-err">This document could not be read: ' + esc(errText(e)) + '</div>';
+    });
+  }
+  function renderDetail() {
+    var secs = S.detail || [];
+    if (!secs.length) { $('ttDetailBody').innerHTML = '<div class="tt-empty">The data service found nothing behind this document.</div>'; return; }
+    $('ttDetailXlsx').disabled = false;
+    $('ttDetailBody').innerHTML = secs.map(function (sec) {
+      var cols = liveCols(sec);
+      var head = cols.map(function (c) { return '<th' + (c[2] === 'money' || c[2] === 'qty' || c[2] === 'cost' ? ' class="num"' : '') + '>' + esc(c[1]) + '</th>'; }).join('');
+      var body = sec.rows.map(function (r) { return '<tr>' + cols.map(function (c) { var isNum = c[2] === 'money' || c[2] === 'qty' || c[2] === 'cost'; return '<td' + (isNum ? ' class="num"' : '') + '>' + cellHtml(c, r[c[0]]) + '</td>'; }).join('') + '</tr>'; }).join('');
+      var foot = '';
+      if (sec.total) {
+        var first = true;
+        foot = '<tfoot><tr>' + cols.map(function (c) {
+          if (c[2] === 'money') return '<td class="num">' + cellHtml(c, sec.total[c[0]]) + '</td>';
+          if (first) { first = false; return '<td>' + esc(trim(sec.total.Comment) || 'Total') + '</td>'; }
+          return '<td></td>';
+        }).join('') + '</tr></tfoot>';
+      }
+      return '<div class="tt-sec"><h2 class="tt-sec-title">' + esc(sec.title) + '</h2><p class="tt-sec-desc">' + esc(sec.desc) + '</p>' +
+        '<div class="perp-grid-wrap"><table class="perp-grid"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody>' + foot + '</table></div></div>';
+    }).join('');
+  }
+  // The document's detail to Excel: one audit-template sheet per section, in the order shown.
+  function exportDetail() {
+    var r = S.detailRow, secs = S.detail || [];
+    RRV8.runExport('Transaction details', toast, function () {
+      if (typeof XLSX === 'undefined' || typeof window.buildAuditSheet !== 'function') { toast('The Excel library has not loaded yet. Try again in a moment.'); return; }
+      if (!r || !secs.length) { toast('Open a document first.'); return; }
+      var wb = XLSX.utils.book_new();
+      secs.forEach(function (sec) {
+        var cols = liveCols(sec), isNum = function (c) { return c[2] === 'money' || c[2] === 'qty' || c[2] === 'cost'; };
+        var rows = sec.rows.map(function (x) { return cols.map(function (c) { if (isNum(c)) { var v = numOrNull(x[c[0]]); return v == null ? '' : v; } return c[2] === 'date' && /^\d{4}-\d{2}-\d{2}/.test(trim(x[c[0]])) ? isoDay(x[c[0]]) : trim(x[c[0]]); }); });
+        var total = null;
+        if (sec.total) { total = cols.map(function (c, i) { if (c[2] === 'money') { var v = numOrNull(sec.total[c[0]]); return v == null ? '' : v; } return i === 0 ? (trim(sec.total.Comment) || 'Total') : ''; }); }
+        var ws = window.buildAuditSheet({
+          columns: cols.map(function (c) { return { label: c[1], num: isNum(c), fmt: c[2] === 'qty' ? '#,##0.####;(#,##0.####)' : (c[2] === 'cost' ? '#,##0.00##;(#,##0.00##)' : undefined) }; }),
+          rows: rows, totalRow: total,
+          titleLines: ['In Transit transaction details — ' + sec.title,
+            'Document ' + trim(r.DT) + ' ' + trim(r.DocNumber) + ' · order ' + trim(r.OT) + ' ' + trim(r.OrderNumber) + ' · company ' + trim(r.CompanyNumber) + ' · ' + dbShortName(dbName()),
+            'Variance here is ledger less in transit, as on the grid · generated ' + new Date().toLocaleString()]
+        });
+        XLSX.utils.book_append_sheet(wb, ws, sec.title.slice(0, 31));
+      });
+      RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'InTransit-TransactionDetails', company: trim(r.CompanyNumber), drill: trim(r.DT) + trim(r.DocNumber) }), toast, 'Transaction details');
+    });
+  }
+  $('ttDetailXlsx').addEventListener('click', exportDetail);
+  $('ttDetailClose').addEventListener('click', function () {
+    S.openKey = ''; S.detail = null; S.detailRow = null; $('ttDetail').hidden = true; renderGrid();
+    try { var u = new URL(location.href); u.searchParams.delete('doc'); u.searchParams.delete('type'); history.replaceState(null, '', u); } catch (_) {}
+  });
+
+  // ---------------------------------------------------------------------------
+  //  Scope band and boot
+  // ---------------------------------------------------------------------------
+  function paintScope() {
+    var items = [['Database', dbShortName(dbName())]];
+    if (S.company) items.push(['Company', S.company + (S.currency ? ' (' + S.currency + ')' : '')]);
+    if (S.period) items.push(['Period ending', fmtDate(S.period)]);
+    var html = items.map(function (x) { return '<span class="tt-scope-item"><span class="tt-scope-k">' + esc(x[0]) + '</span><span class="tt-scope-v">' + esc(x[1]) + '</span></span>'; }).join('');
+    if (S.rows.length) {
+      var v = S.rows.reduce(function (a, r) { return a + num(r.Variance); }, 0);
+      html += '<span class="tt-scope-item"><span class="tt-scope-k">Lines</span><span class="tt-scope-v">' + esc(S.rows.length.toLocaleString()) + '</span></span>' +
+        '<span class="tt-scope-item tt-scope-total"><span class="tt-scope-k">Transaction variance</span><span class="tt-scope-v' + (v < -0.005 ? ' is-neg' : '') + '">' + esc(curMoney(v, S.currency)) + '</span></span>';
+    }
+    $('ttScopeItems').innerHTML = html;
+  }
+  function notice(html) { $('ttNoticeText').innerHTML = html; $('ttNotice').hidden = false; $('ttWork').hidden = true; }
+
+  function boot() {
+    if (!hasToken()) { window.location.href = '../login.html'; return; }
+    if (window.RRV8 && window.RRV8.hydrateSession) window.RRV8.hydrateSession();
+    paintScope();
+    // The Agent's own words for this refusal (InTransitModuleGate), as on transit.html.
+    if (!hasModule()) { notice('In Transit is not turned on for you on this database. Your administrator turns it on for each person, one database at a time.'); return; }
+    if (!canAnalyst() && !canAccountant()) { notice('You have no lane on <b>' + esc(dbName()) + '</b>. In Transit has an accountant view and an analyst view, and your role on this database gives you neither.'); return; }
+    if (!canEditNotes()) $('ttLedeEdit').hidden = true;
+    var qs = new URLSearchParams(location.search);
+    S.company = trim(qs.get('company')); S.period = isoDay(qs.get('period'));
+    var want = { doc: trim(qs.get('doc')), type: trim(qs.get('type')) };
+    // Opened without a company or period (a bookmark, a hand-typed link): the first company In Transit offers and
+    // its latest period, from the same status read transit.html boots on.
+    var ready = (S.company && S.period) ? Promise.resolve() : rrFetch('in-transit/status').then(function (st) {
+      var f = (st && st.reconciliationFilter) || {};
+      var cos = (f.companies || []).map(trim).filter(Boolean).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
+      if (!S.company) S.company = cos[0] || '';
+      if (!S.period) S.period = isoDay(f.period);
+    });
+    ready.then(function () {
+      if (!S.company || !S.period) { notice('There is no In Transit period to show on <b>' + esc(dbName()) + '</b> yet. Open this page from <a href="transit.html">In Transit</a>.'); return; }
+      paintScope();
+      $('ttWork').hidden = false;
+      gridShell(); renderGrid();
+      var body = { reconciliationFilter: { companies: [S.company], businessUnits: [], objects: [], subsidiaries: [], period: S.period } };
+      return rrFetch('in-transit/transactions', { method: 'POST', body: body }).then(function (d) {
+        if (!d || !Array.isArray(d.data)) throw new Error('the data service returned a response this page could not read');
+        S.rows = d.data;
+        for (var i = 0; i < S.rows.length; i++) if (trim(S.rows[i].Currency)) { S.currency = trim(S.rows[i].Currency); break; }
+        paintScope(); renderGrid();
+        if (want.doc) {
+          var hit = S.rows.filter(function (r) { return trim(r.DocNumber) === want.doc && (!want.type || trim(r.DT) === want.type); })[0];
+          if (hit) {
+            if (S.onlyVar && Math.abs(num(hit.Variance)) < 0.005) { S.onlyVar = false; $('ttOnlyVar').classList.remove('is-on'); }
+            openDoc(hit, true);
+          } else toast('Document ' + want.doc + ' has no open line in this period, so no document is open.');
+        }
+      });
+    }).catch(function (e) {
+      notice('In Transit transactions could not be read from the data service: ' + esc(errText(e)));
+    });
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

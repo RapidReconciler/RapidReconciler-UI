@@ -255,8 +255,28 @@ accountant").**
   page and view (`RRV8.glossaryFor`, `data-help-glossary="transit"`). Every other analyst prompt still gets the
   whole GLOSSARY, these five included.
 
-**Still to build:** the two drill-ins, and the live check on Demo1 (analyst, accountant, a user without the module)
-now that the assistants are in.
+**The two drill-ins, built 2026-11-22, not committed (worktree `_wt/ui-240-ui`).** Both in Inventory's drill-in
+shape: a page title, the navy scope band, Home's grid markup from `home-frame.css`, Excel through the shared audit
+template (`Tools/audit-workbook.js`). Back returns to the tab and company they were opened from; `transit.html` keeps
+no period in its address, so it reopens on the latest period.
+- **`transit-transactions.html`**, from a Transaction Variance document number or the grid's **Transaction Details**
+  button. The period's lines for the company; pick lines, **Edit notes** (Worked and one note, Inventory's batch
+  edit), Save through `in-transit/transactions/save-notes`, one body per period because PeriodEnds is in the note's
+  key. A document number opens its detail: `in-transit/transactions/details` read as sections by `Sort` (in transit,
+  general ledger, compare, sales order, purchase receipt, DMAAIs), totals as footers, empty columns left out.
+  Editing is the analyst lane's (`perms.dm`); an accountant reads it.
+- **Signs, measured on Demo1 the same day:** the grid's stored Variance is ledger less in transit (54,498 of 54,498
+  open lines); `usp6transcompare2`'s is in transit less ledger in every section. **Owner 2026-11-22: "Match the
+  grid."** The page negates the procedure's Variance (`gridSign`), so the detail reads "Ledger less in transit",
+  the grid's sign; the procedure is unchanged.
+- **`transit-asof.html`**, from an On Hand item. `in-transit/as-of/details` (`usp6transitemroll`) by account, newest
+  first, with the beginning balance, each ship and receipt, each exclusion taken back out, and the ending balance.
+  Not sortable, because the running balance reads only in that order. The scope band heads with the item's On Hand
+  figure for the period (the same `in-transit/as-of` read); lines after that period are dimmed.
+- `Tools/test-transit-drillins.js`: 24 assertions, 25 mutation arms, all red.
+
+**Still to build:** nothing. **Still to check:** the drill-ins in a browser, and the live check on Demo1 (analyst,
+accountant, a user without the module).
 
 **5. Verify.** On Demo1 as an analyst, an accountant, and a user without the module (no pill, and a 403 from the
 Agent). Update the RR University transfer-order docs wherever V8 differs from V7.
