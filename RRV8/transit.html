@@ -108,6 +108,9 @@
   .it-grid .perp-grid td .it-muted { color: var(--text-muted); }
   .it-grid .perp-grid td.it-mono, .it-grid .perp-grid td .it-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .it-grid .perp-grid td .it-acct { font-weight: 700; color: var(--navy); }
+  /* A drill-in link in a grid cell (UI-240): the document on Transaction Variance, the item on On Hand. */
+  .it-grid .perp-grid td .it-drill { color: var(--blue); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+  .it-grid .perp-grid td .it-drill:hover { color: var(--navy); }
   /* DAC-94 (owner 2026-11-06, "widen the notes column so each row is a single line"): a wrapped note made every
      Excluded Orders row two lines tall. The note keeps its own width; the grid scrolls sideways like every other column. */
   .it-grid .perp-grid td.it-note { white-space: nowrap; min-width: 180px; }
@@ -764,9 +767,25 @@
     m('endOfDay', 'End of day'), m('exclusions', 'Exclusions'), m('transactionVariance', 'Txn variance'), m('journalEntries', 'JEs'),
     m('outOfBalance', 'Out of balance'),
     { k: 'breaks', label: 'Roll breaks', num: true, qty: true, get: function (r) { return num(r.glRollBreaks) + num(r.varianceRollBreaks); }, render: function (r) { var n = num(r.glRollBreaks) + num(r.varianceRollBreaks); return n ? '<span class="neg">' + n + '</span>' : '<span class="it-muted">&mdash;</span>'; } } ];
-  var ONHAND_COLS = [C.co, C.acct, t('ItemNumber', 'Item', 'it-mono'), t('ThirdItem', '3rd item', 'it-mono'), t('Description', 'Description'), t('Lot', 'Lot', 'it-mono'), t('UOM', 'UOM'),
+  // The two drill-ins (UI-240). Each carries the scope this page is on, so it opens on the same company and period.
+  // Back returns here, to the same tab and company (showTab keeps ?tab= and ?company= in the address), on the
+  // latest period: the period is not in the address.
+  function txDrillHref(r, all) {
+    var q = 'company=' + encodeURIComponent(trim(r.CompanyNumber) || S.company) + '&period=' + encodeURIComponent(isoDay(r.PeriodEnds) || S.period);
+    if (!all) q += '&doc=' + encodeURIComponent(trim(r.DocNumber)) + '&type=' + encodeURIComponent(trim(r.DT));
+    return 'transit-transactions.html?' + q;
+  }
+  function asofDrillHref(r) {
+    return 'transit-asof.html?company=' + encodeURIComponent(trim(r.CompanyNumber) || S.company) + '&item=' + encodeURIComponent(trim(r.ItemNumber)) +
+      '&lot=' + encodeURIComponent(trim(r.Lot)) + '&period=' + encodeURIComponent(S.period);
+  }
+  var ONHAND_COLS = [C.co, C.acct,
+    { k: 'ItemNumber', label: 'Item', get: function (r) { return trim(r.ItemNumber); }, render: function (r) { return '<a class="it-drill it-mono" href="' + esc(asofDrillHref(r)) + '" title="See every shipment and receipt behind this item">' + esc(trim(r.ItemNumber)) + '</a>'; } },
+    t('ThirdItem', '3rd item', 'it-mono'), t('Description', 'Description'), t('Lot', 'Lot', 'it-mono'), t('UOM', 'UOM'),
     q('Quantity', 'Quantity'), m('Amount', 'Amount')];
-  var TXV_COLS = [C.co, C.acct, C.period, t('OT', 'Order type'), t('OrderNumber', 'Order', 'it-mono'), t('DT', 'Doc type'), t('DocNumber', 'Doc', 'it-mono'), t('Batch', 'Batch', 'it-mono'),
+  var TXV_COLS = [C.co, C.acct, C.period, t('OT', 'Order type'), t('OrderNumber', 'Order', 'it-mono'), t('DT', 'Doc type'),
+    { k: 'DocNumber', label: 'Doc', get: function (r) { return trim(r.DocNumber); }, render: function (r) { return '<a class="it-drill it-mono" href="' + esc(txDrillHref(r)) + '" title="Open this document’s detail and notes">' + esc(trim(r.DocNumber)) + '</a>'; } },
+    t('Batch', 'Batch', 'it-mono'),
     { k: 'TransDate', label: 'Date', get: function (r) { return isoDay(r.TransDate); }, render: function (r) { return esc(fmtDate(r.TransDate)); } },
     m('TransitAmount', 'In transit'), m('LedgerAmount', 'Ledger'),
     { k: 'Variance', label: 'Variance', num: true, render: function (r) { return moneyCell(r.Variance); }, sortVal: function (r) { return Math.abs(num(r.Variance)); } },
@@ -1240,10 +1259,12 @@
   function loadTxv() {
     if (!_txGrid) {
       _txGrid = new Grid($('txGrid'), { title: 'Transaction variance', surface: 'TransactionVariance', cols: TXV_COLS, sort: { k: 'Variance', dir: 'desc' },
-        tools: '<button class="perp-xlsx is-on" type="button" id="txOnly" title="Show only documents with a variance">Variances only</button>',
+        tools: '<button class="perp-xlsx is-on" type="button" id="txOnly" title="Show only documents with a variance">Variances only</button>' +
+          '<button class="perp-xlsx" type="button" id="txDetails" title="Mark lines worked, add notes, and open any document">Transaction Details</button>',
         filter: function (r) { return !_txOnlyVar || Math.abs(num(r.Variance)) >= 0.005; }, empty: 'No transfer documents in this period.',
         emptyFiltered: 'No transfer document in this period has a variance.' });
       $('txOnly').addEventListener('click', function () { _txOnlyVar = !_txOnlyVar; this.classList.toggle('is-on', _txOnlyVar); _txGrid.render(); });
+      $('txDetails').addEventListener('click', function () { location.href = txDrillHref({}, true); });
     }
     _txGrid.wait();
     rrFetch('in-transit/transactions', { method: 'POST', body: filterBody() }).then(function (d) {

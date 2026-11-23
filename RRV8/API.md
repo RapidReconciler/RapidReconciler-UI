@@ -109,7 +109,8 @@ Full JWT payload shape:
 ### In Transit (Services: UI-239; pages: UI-240)
 
 `transit.html` (UI-240, the module's landing page) calls every one of these except `/details`, `/save-notes` and
-`/as-of/details`, which belong to the drill-in pages still to come. Each is an `rrFetch` area under `in-transit/`,
+`/as-of/details`, which belong to its two drill-ins: `transit-transactions.html` (a Transaction Variance document, or
+the grid's **Transaction Details** button) and `transit-asof.html` (an On Hand item). Each is an `rrFetch` area under `in-transit/`,
 routed to the active database's data services by **`'in-transit/'` in `RR_TEST_AGENT_PREFIXES` (`config.js`,
 added by UI-240)**; `Tools/test-transit-page.js` fails if it goes. Home's module pill lists In Transit as live
 and opens `transit.html` (owner 2026-11-05, ahead of the drill-ins). Since slice 2 the page wears Home's frame
@@ -154,10 +155,11 @@ What a page needs to know:
 | `in-transit/reconciliation/history` | POST | `transit.html` the period chart (`#periodWidget`, click a bar to pick the period), Overview trend, Data Health counts, Audit Center |
 | `in-transit/reconciliation/journal-entry` | POST | `transit.html` Audit Center (Journal Entry sheet) |
 | `in-transit/variance-component` | POST | `transit.html` Audit Center (one sheet per component) |
-| `in-transit/transactions` | POST | `transit.html` Transaction Variance |
-| `in-transit/transactions/details`, `/save-notes` | POST | `transit-transactions.html` (not built yet) |
-| `in-transit/as-of` | POST | `transit.html` On Hand |
-| `in-transit/as-of/details` | POST | `transit-asof.html` (not built yet) |
+| `in-transit/transactions` | POST | `transit.html` Transaction Variance; `transit-transactions.html` the period's lines, for one company |
+| `in-transit/transactions/details` | POST | `transit-transactions.html` the document behind a line. Body `{company, doc, type}`: `type`, not `docType`, and `doc` a number. One `usp6transcompare2` rowset, read as sections by `Sort` (in transit, general ledger, compare, sales order, purchase receipt, DMAAIs); each section's total is its footer. Its Variance is in transit less ledger, the opposite sign of the grid's stored Variance (ledger less in transit), so the page labels it that way and flips neither |
+| `in-transit/transactions/save-notes` | POST | `transit-transactions.html` Edit notes (analyst lane, `perms.dm`). Body `{period, notes:[TransitNote]}`; `batchNumber`, `docNumber`, `orderNumber` are numbers. PeriodEnds is part of the note's key, so the page sends one body per period and saves each line under its own. Answers 204 |
+| `in-transit/as-of` | POST | `transit.html` On Hand; `transit-asof.html` the item's figure for the period |
+| `in-transit/as-of/details` | POST | `transit-asof.html` the item roll. Body `{companyNumber, itemNumber, lot}`; rows in the procedure's order (by account, newest first), because the running balance reads only that way. The page also reads `in-transit/as-of` (the item's On Hand figure for the period) and `in-transit/reconciliation/rows` (the currency) |
 | `in-transit/orders`, `/orders/exclusions` | POST | `transit.html` Orders (lines in transit; Exclude) and Excluded Orders (excluded lines; Un-exclude), one read for both, writes on `perms.ite` (DAC-94) |
 | `in-transit/orders/recalc` | POST | `transit.html` Orders and Excluded Orders, Recalculate balance above the grid (`perms.ite`) |
 | `in-transit/orders/recalc-status` | GET | `transit.html` Orders and Excluded Orders |

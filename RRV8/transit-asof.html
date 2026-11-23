@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<!--
+  =============================================================================
+  In Transit Item Roll  (UI-240)  --  a drill-in of transit.html
+  =============================================================================
+  Reached from In Transit's accountant tab On Hand: click an item. Inventory's
+  Full Perpetual Details item ledger (inventory-asof.html, the popover behind a
+  row) is the model: what is behind one position, newest first, with a running
+  balance. In Transit has no branch, location, GL class or UOM in the key, so
+  the position is company, item and lot.
+
+    ?company=90001&item=TX-100&lot=&period=2025-07-31
+
+  Data: POST in-transit/as-of/details {companyNumber, itemNumber, lot}
+  (usp6transitemroll; Agent specs/in-transit-as-of.md). The procedure returns,
+  per in-transit account, oldest at the bottom:
+    * 'Beg bal'           the baseline on hand (the period before the first one)
+    * ''                  each ship and receipt line (Transit_Item_Details)
+    * 'Exclusion Adjust'  each excluded order, taken back out (v6_transit_excluded_details)
+    * 'End bal'           today's on hand, dated the day after the last period
+  with runqty / runamt summed from the bottom up, per account. Rows come back in
+  the procedure's order and stay in it: the running balance only reads in that
+  order, so this grid does not sort.
+
+  The period on the URL is the On Hand period the user clicked from. Its figure
+  for this item (POST in-transit/as-of, the same read On Hand makes) heads the
+  scope band, and rows after that period are dimmed. Nothing here recomputes it.
+
+  Gates: transit.html's. Module = t.it AND m.it, fail closed; either In Transit
+  view may read it (read-only, like the On Hand tab it opens from).
+  =============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>In Transit Item Roll &mdash; RapidReconciler</title>
+<link href="fonts/fonts.css" rel="stylesheet">
+<script src="config.js"></script>
+<script src="export-guard.js"></script>
+<!-- sidebar.js: the session (hydrateSession) and the idle and expiry guard, as on every V8 page. -->
+<script src="sidebar.js"></script>
+<script src="vendor/xlsx-js-style.min.js" defer></script>
+<script defer src="../Tools/audit-workbook.js"></script>
+<link href="home-frame.css" rel="stylesheet">
+<link rel="stylesheet" href="../Tools/help-sidebar.css">
+<script defer src="../Tools/help-sidebar.js"></script>
+<style>
+  /* This page only. Every class starts ta- so none can collide with home-frame.css. */
+  [hidden] { display: none !important; }
+  body { background: #fafbfd; }
+  .ta-page { max-width: 1340px; margin: 0 auto; padding: 16px 28px 64px; }
+  .ta-title { font-family: 'Source Sans 3', sans-serif; font-size: 32px; font-weight: 800; letter-spacing: -0.01em; color: var(--navy); margin: 0 0 14px; }
+
+  /* The scope band: the V8 standard (navy left accent, 12.5px labels, 19px values, 24px headline figure). */
+  .ta-scope { display: flex; align-items: center; gap: 16px 34px; flex-wrap: wrap; margin: 0 0 18px; padding: 18px 24px; background: var(--bg-card); border: 1px solid var(--rule); border-left: 4px solid var(--navy); border-radius: 12px; box-shadow: var(--shadow-sm); }
+  /* flex-start, not center: Item and the headline carry a second line, and every label still starts on one row. */
+  .ta-scope-items { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 34px; flex: 1; min-width: 0; }
+  .ta-scope-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .ta-scope-k { font-size: 12.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+  .ta-scope-v { font-family: 'Source Sans 3', sans-serif; font-size: 19px; font-weight: 800; color: var(--navy); }
+  .ta-scope-v.is-neg { color: var(--red); }
+  .ta-scope-sub { font-size: 15px; font-weight: 600; color: var(--text-muted); }
+  .ta-scope-total { margin-left: auto; padding-left: 22px; border-left: 1px solid var(--rule); align-items: flex-end; text-align: right; }
+  .ta-scope-total .ta-scope-v { font-size: 24px; }
+  .ta-scope > .topbar-help { flex-shrink: 0; }
+
+  .ta-lede { margin: 0 0 16px; padding-left: 20px; font-size: 15px; line-height: 1.6; color: var(--text); }
+  .ta-lede b { color: var(--navy); }
+  .ta-block { margin-bottom: 18px; }
+  .ta-grid .perp-grid-wrap { max-height: 620px; }
+  .ta-grid .perp-grid td .ta-muted { color: var(--text-muted); }
+  .ta-grid .perp-grid td .ta-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .ta-grid .perp-grid tbody tr.is-bal td { background: var(--bg-soft); font-weight: 700; color: var(--navy); }
+  .ta-grid .perp-grid tbody tr.is-excl td { background: var(--orange-pale); }
+  .ta-grid .perp-grid tbody tr.is-after td { opacity: .55; }
+  .ta-grid .perp-grid tbody tr.ta-acct-row td { background: var(--blue-pale); color: var(--navy); font-weight: 800; font-size: 13px; }
+  .ta-grid .perp-grid td .neg { color: var(--red); }
+  .ta-empty { padding: 34px 20px; text-align: center; color: var(--text-muted); font-style: italic; white-space: normal; font-size: 14px; }
+  .ta-empty.is-err { color: var(--red); font-style: normal; }
+  .ta-chip { display: inline-flex; align-items: center; font-weight: 700; font-size: 11.5px; padding: 2px 9px; border-radius: 100px; background: var(--orange-pale); color: var(--orange-deep); }
+</style>
+</head>
+<body data-help-src="../RRUniversity/transfer-order-reconcile.html" data-help-title="In Transit Item Roll" data-help-glossary="transit">
+
+<div class="ta-page">
+  <h1 class="ta-title">In Transit Item Roll</h1>
+
+  <!-- The help "?" mounts here ([data-help-host]); paintScope() rewrites #taScopeItems only (UI-250). -->
+  <section class="ta-scope" id="taScope" aria-label="Report parameters" data-help-host>
+    <div class="ta-scope-items" id="taScopeItems">
+      <span class="ta-scope-item"><span class="ta-scope-k">Database</span><span class="ta-scope-v" id="taDb">&mdash;</span></span>
+    </div>
+  </section>
+
+  <div class="home-notice" id="taNotice" role="status" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span id="taNoticeText"></span>
+  </div>
+
+  <div id="taWork" hidden>
+    <ul class="ta-lede">
+      <li>Every shipment and receipt behind this item&rsquo;s in-transit balance, newest first, for each in-transit account.</li>
+      <li>The <b>running</b> columns are the balance after each line. <b>Beginning balance</b> is where the history starts; <b>Ending balance</b> is today.</li>
+      <li><b>Exclusion</b> lines take excluded orders back out. Lines after the period you opened from are dimmed.</li>
+    </ul>
+    <div class="ta-block" id="taGrid"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------------
+  //  Routing: transit.html's rrFetch, agent half only (RR_TEST_AGENT_PREFIXES).
+  // ---------------------------------------------------------------------------
+  function prodHeaders(contentType) {
+    var h = { 'Accept': 'application/json' };
+    var tok = (window.RR_SESSION && window.RR_SESSION.token) || null;
+    if (!tok) { try { tok = localStorage.getItem('rrv8.token'); } catch (_) {} }
+    if (tok) h['Authorization'] = 'Bearer ' + tok;
+    if (contentType) h['Content-Type'] = contentType;
+    return h;
+  }
+  var _testAgentAreas = new Set(window.RR_TEST_AGENT_AREAS || []);
+  var _testAgentPrefixes = window.RR_TEST_AGENT_PREFIXES || ['download-excel/', 'in-transit/'];
+  function _routesToTestAgent(area) {
+    if (_testAgentAreas.has(area)) return true;
+    for (var i = 0; i < _testAgentPrefixes.length; i++) if (area.indexOf(_testAgentPrefixes[i]) === 0) return true;
+    return false;
+  }
+  function rrFetch(area, opts) {
+    opts = opts || {};
+    if (!_routesToTestAgent(area)) return Promise.reject(new Error('This page has no route for ' + area + '.'));
+    var base = window.RRDB && window.RRDB.agentBase();
+    if (!base) return Promise.reject(new Error('No active database. Sign in again from the hub.'));
+    var url = base + '/' + area;
+    return fetch(url, {
+      method: opts.method || 'GET',
+      headers: prodHeaders(opts.body ? 'application/json;charset=UTF-8' : null),
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      if (!r.ok) return window.RRDB.responseError(r, url).then(function (e) { throw e; });
+      return r.json().catch(function (e) { if (e instanceof SyntaxError) return null; throw e; });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Small helpers (transit.html's)
+  // ---------------------------------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (m) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]; }); }
+  function trim(s) { return String(s == null ? '' : s).trim(); }
+  function num(v) { var x = Number(v); return isFinite(x) ? x : 0; }
+  function money(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return x < 0 ? '(' + a + ')' : a; }
+  function qty(n) { var x = num(n); var a = Math.abs(x).toLocaleString('en-US', { maximumFractionDigits: 4 }); return x < 0 ? '(' + a + ')' : a; }
+  function sym(code) {
+    var c = trim(code).toUpperCase(); if (!c) return '';
+    try { var parts = new Intl.NumberFormat('en-US', { style: 'currency', currency: c }).formatToParts(0); for (var i = 0; i < parts.length; i++) if (parts[i].type === 'currency') return parts[i].value; } catch (_) {}
+    return c + ' ';
+  }
+  function curMoney(n, code) { var x = num(n); var a = sym(code) + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return x < 0 ? '(' + a + ')' : a; }
+  function moneyCell(n) { var x = num(n); if (Math.abs(x) < 0.005) return '<span class="ta-muted">&mdash;</span>'; return '<span class="' + (x < 0 ? 'neg' : '') + '">' + money(x) + '</span>'; }
+  function qtyCell(n) { var x = num(n); if (Math.abs(x) < 0.00005) return '<span class="ta-muted">&mdash;</span>'; return '<span class="' + (x < 0 ? 'neg' : '') + '">' + qty(x) + '</span>'; }
+  function isoDay(v) { var s = trim(v); return s.length >= 10 ? s.slice(0, 10) : s; }
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fmtDate(v) { var s = isoDay(v); var p = s.split('-'); if (p.length !== 3 || !MON[(+p[1]) - 1]) return s; return MON[(+p[1]) - 1] + ' ' + (+p[2]) + ', ' + p[0]; }
+  function toast(m) { var t = $('toast'); if (!t) return; t.textContent = m; t.classList.add('is-visible'); clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove('is-visible'); }, 3600); }
+  function errText(e) { return (e && (e.serverMessage || e.message)) || String(e); }
+  function dbShortName(n) { n = String(n || ''); return n.replace(/^RapidReconciler_/, '') || n; }
+
+  // ---------------------------------------------------------------------------
+  //  Gates: transit.html's.
+  // ---------------------------------------------------------------------------
+  function activeDb() { return (window.RRDB && window.RRDB.active && window.RRDB.active()) || {}; }
+  function hasToken() { try { return !!localStorage.getItem('rrv8.token'); } catch (_) { return false; } }
+  function hasModule() { var a = activeDb(); return !!(a.m && a.m.it === true && a.t && a.t.it === true); }
+  function perms() { return activeDb().perms || {}; }
+  function canAccountant() { return perms().ac === true; }
+  function canAnalyst() { return perms().dm === true; }
+  function dbName() { return trim(activeDb().n) || 'this database'; }
+
+  // ---------------------------------------------------------------------------
+  //  The request, and how the procedure's rows read. Pinned by Tools/test-transit-drillins.js.
+  // ---------------------------------------------------------------------------
+  // POST in-transit/as-of/details (AsOfDetailsRequest; companyNumber and itemNumber are required, lot may be blank).
+  function rollBody(company, item, lot) {
+    return { companyNumber: trim(company), itemNumber: trim(item), lot: trim(lot) };
+  }
+  // What a row is, from usp6transitemroll's `comm`: 'Beg bal', 'End bal', 'Exclusion Adjust', or '' for a ledger line.
+  function rollKind(r) {
+    var c = trim(r.comm).toLowerCase();
+    if (c === 'beg bal') return 'beg';
+    if (c === 'end bal') return 'end';
+    if (c.indexOf('exclusion') === 0) return 'excl';
+    return 'line';
+  }
+  var KIND_LABEL = { beg: 'Beginning balance', end: 'Ending balance', excl: 'Exclusion', line: '' };
+  // The rows by in-transit account, in the procedure's order (it sorts by account, then newest first).
+  function rollAccounts(rows) {
+    var by = {}, order = [];
+    (rows || []).forEach(function (r) {
+      var a = trim(r.longaccount);
+      if (!by[a]) { by[a] = []; order.push(a); }
+      by[a].push(r);
+    });
+    return order.map(function (a) { return { account: a, rows: by[a] }; });
+  }
+  // A ledger or exclusion line dated after the period the page was opened from. The two balance rows are never
+  // dimmed: the ending balance is dated the day after the last period, so it would always read as "after".
+  function isAfter(r, period) { var k = rollKind(r); return !!period && (k === 'line' || k === 'excl') && isoDay(r.periodends) > period; }
+
+  var COLS = [
+    { k: 'kind', label: 'Line', get: function (r) { return KIND_LABEL[rollKind(r)]; }, render: function (r) { var k = rollKind(r); return k === 'excl' ? '<span class="ta-chip">Exclusion</span>' : esc(KIND_LABEL[k]); } },
+    { k: 'periodends', label: 'Period', date: true },
+    { k: 'creationdate', label: 'Date', date: true, get: function (r) { return rollKind(r) === 'line' || rollKind(r) === 'excl' ? isoDay(r.creationdate) : ''; } },
+    { k: 'dt', label: 'Doc type' }, { k: 'doc', label: 'Doc', mono: true, get: function (r) { return num(r.doc) ? trim(r.doc) : ''; } },
+    { k: 'ordtype', label: 'Order type' }, { k: 'ordnum', label: 'Order', mono: true, get: function (r) { return num(r.ordnum) ? trim(r.ordnum) : ''; } },
+    { k: 'reltype', label: 'Rel type' }, { k: 'relnum', label: 'Rel order', mono: true, get: function (r) { return num(r.relnum) ? trim(r.relnum) : ''; } },
+    { k: 'branch', label: 'Branch', mono: true }, { k: 'glclass', label: 'GL class' },
+    { k: 'qty', label: 'Quantity', qty: true }, { k: 'uom', label: 'UOM' }, { k: 'val', label: 'Amount', money: true },
+    { k: 'runqty', label: 'Running quantity', qty: true }, { k: 'runamt', label: 'Running amount', money: true }
+  ];
+  function text(c, r) { var v = c.get ? c.get(r) : r[c.k]; return v == null ? '' : String(v).trim(); }
+
+  // ---------------------------------------------------------------------------
+  //  Page state, grid, export
+  // ---------------------------------------------------------------------------
+  var S = { company: '', item: '', lot: '', period: '', rows: [], onHand: null, currency: '', q: '' };
+
+  function gridShell() {
+    $('taGrid').innerHTML =
+      '<div class="acct-snapshot ta-grid">' +
+        '<div class="acct-snap-headline"><span class="acct-snap-title">Item roll</span></div>' +
+        '<div class="perp-resid">' +
+          '<input class="perp-search" id="taSearch" type="search" placeholder="Search&hellip;" autocomplete="off" aria-label="Search the item roll">' +
+          '<button class="perp-xlsx" type="button" id="taXlsx" title="Export the item roll to Excel">Excel</button>' +
+          '<span class="perp-resid-count" id="taCount">&mdash;</span>' +
+        '</div>' +
+        '<div class="perp-grid-wrap"><table class="perp-grid"><thead><tr>' +
+          COLS.map(function (c) { return '<th' + (c.qty || c.money ? ' class="num"' : '') + '>' + esc(c.label) + '</th>'; }).join('') +
+        '</tr></thead><tbody id="taBody"><tr><td class="ta-empty" colspan="' + COLS.length + '">Loading&hellip;</td></tr></tbody></table></div>' +
+      '</div>';
+    var t;
+    $('taSearch').addEventListener('input', function (e) { clearTimeout(t); var v = e.target.value; t = setTimeout(function () { S.q = v; renderGrid(); }, 150); });
+    $('taXlsx').addEventListener('click', exportRoll);
+  }
+  function matches(r) {
+    var q = trim(S.q).toLowerCase(), anchor = false;
+    if (!q) return true;
+    if (q.charAt(0) === '^') { anchor = true; q = q.slice(1); }
+    for (var i = 0; i < COLS.length; i++) { var t = text(COLS[i], r).toLowerCase(); if (anchor ? t.indexOf(q) === 0 : t.indexOf(q) >= 0) return true; }
+    return false;
+  }
+  function cell(c, r) {
+    if (c.render) return c.render(r);
+    if (c.money) return moneyCell(r[c.k]);
+    if (c.qty) return qtyCell(r[c.k]);
+    var v = text(c, r);
+    if (c.date) return esc(v ? fmtDate(v) : '');
+    return c.mono ? '<span class="ta-mono">' + esc(v) + '</span>' : esc(v);
+  }
+  function renderGrid() {
+    var groups = rollAccounts(S.rows), many = groups.length > 1, shown = 0, html = '';
+    groups.forEach(function (g) {
+      var rows = g.rows.filter(matches); shown += rows.length;
+      if (!rows.length) return;
+      if (many) html += '<tr class="ta-acct-row"><td colspan="' + COLS.length + '">Account <span class="ta-mono">' + esc(g.account) + '</span></td></tr>';
+      html += rows.map(function (r) {
+        var k = rollKind(r), cls = (k === 'beg' || k === 'end' ? 'is-bal' : (k === 'excl' ? 'is-excl' : '')) + (isAfter(r, S.period) ? ' is-after' : '');
+        return '<tr class="' + cls.trim() + '">' + COLS.map(function (c) { return '<td' + (c.qty || c.money ? ' class="num"' : '') + '>' + cell(c, r) + '</td>'; }).join('') + '</tr>';
+      }).join('');
+    });
+    $('taCount').textContent = shown.toLocaleString() + (shown === S.rows.length ? '' : ' of ' + S.rows.length.toLocaleString()) + (S.rows.length === 1 ? ' line' : ' lines');
+    $('taBody').innerHTML = html || '<tr><td class="ta-empty" colspan="' + COLS.length + '">' + esc(S.rows.length ? 'No lines match.' : 'The data service found no in-transit history for this item.') + '</td></tr>';
+  }
+
+  // The roll to Excel, in the procedure's order (the running balance reads only that way): the shared audit template.
+  function exportRoll() {
+    RRV8.runExport('Item roll', toast, function () {
+      if (typeof XLSX === 'undefined' || typeof window.buildAuditSheet !== 'function') { toast('The Excel library has not loaded yet. Try again in a moment.'); return; }
+      var rows = S.rows.filter(matches);
+      if (!rows.length) { toast('No lines are shown, so there is nothing to export.'); return; }
+      var cols = [{ label: 'Account', num: false }].concat(COLS.map(function (c) {
+        return { label: c.label + (c.money && S.currency ? ' (' + S.currency + ')' : ''), num: !!(c.qty || c.money), fmt: c.qty ? '#,##0.####;(#,##0.####)' : undefined };
+      }));
+      var aoa = rows.map(function (r) {
+        return [trim(r.longaccount)].concat(COLS.map(function (c) { return c.qty || c.money ? num(r[c.k]) : (c.date ? isoDay(text(c, r)) : text(c, r)); }));
+      });
+      var ws = window.buildAuditSheet({ columns: cols, rows: aoa, titleLines: [
+        'In Transit item roll',
+        'Item ' + S.item + (S.lot ? ' · lot ' + S.lot : '') + ' · company ' + S.company + ' · ' + dbShortName(dbName()),
+        (S.onHand ? 'In transit at ' + fmtDate(S.period) + ': ' + qty(S.onHand.qty) + ' ' + S.onHand.uom + ', ' + curMoney(S.onHand.amt, S.currency) + ' · ' : '') +
+          'newest first; running columns are the balance after each line' + (trim(S.q) ? ' · lines matching “' + trim(S.q) + '”' : ''),
+        'Generated ' + new Date().toLocaleString()
+      ] });
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Item roll');
+      RRV8.saveWorkbook(wb, RRV8.exportName({ surface: 'InTransit-ItemRoll', company: S.company, drill: S.item + (S.lot ? '-' + S.lot : ''), period: S.period }), toast, 'Item roll');
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Scope band and boot
+  // ---------------------------------------------------------------------------
+  function paintScope() {
+    var items = [['Database', dbShortName(dbName())]];
+    if (S.company) items.push(['Company', S.company + (S.currency ? ' (' + S.currency + ')' : '')]);
+    if (S.item) items.push(['Item', S.item, S.onHand && S.onHand.desc]);
+    if (S.lot) items.push(['Lot', S.lot]);
+    var html = items.map(function (x) {
+      return '<span class="ta-scope-item"><span class="ta-scope-k">' + esc(x[0]) + '</span><span class="ta-scope-v">' + esc(x[1]) + '</span>' + (x[2] ? '<span class="ta-scope-sub">' + esc(x[2]) + '</span>' : '') + '</span>';
+    }).join('');
+    if (S.period) {
+      var oh = S.onHand;
+      html += '<span class="ta-scope-item ta-scope-total"><span class="ta-scope-k">In transit at ' + esc(fmtDate(S.period)) + '</span>' +
+        '<span class="ta-scope-v' + (oh && oh.amt < -0.005 ? ' is-neg' : '') + '">' + esc(oh ? curMoney(oh.amt, S.currency) : '—') + '</span>' +
+        '<span class="ta-scope-sub">' + esc(oh ? qty(oh.qty) + ' ' + oh.uom : 'Not on the On Hand list for this period') + '</span></span>';
+    }
+    $('taScopeItems').innerHTML = html;
+  }
+  function notice(html) { $('taNoticeText').innerHTML = html; $('taNotice').hidden = false; $('taWork').hidden = true; }
+
+  // On Hand's figure for this item in the period: the same read the On Hand tab makes, summed over the item's
+  // rows for this lot (one per in-transit account).
+  function onHandOf(data) {
+    var hit = (data || []).filter(function (r) { return trim(r.ItemNumber) === S.item && trim(r.Lot) === S.lot; });
+    if (!hit.length) return null;
+    return { qty: hit.reduce(function (a, r) { return a + num(r.Quantity); }, 0), amt: hit.reduce(function (a, r) { return a + num(r.Amount); }, 0),
+             uom: trim(hit[0].UOM), desc: trim(hit[0].Description) };
+  }
+
+  function boot() {
+    if (!hasToken()) { window.location.href = '../login.html'; return; }
+    if (window.RRV8 && window.RRV8.hydrateSession) window.RRV8.hydrateSession();
+    paintScope();
+    if (!hasModule()) { notice('In Transit is not turned on for you on this database. Your administrator turns it on for each person, one database at a time.'); return; }
+    if (!canAnalyst() && !canAccountant()) { notice('You have no lane on <b>' + esc(dbName()) + '</b>. In Transit has an accountant view and an analyst view, and your role on this database gives you neither.'); return; }
+    var qs = new URLSearchParams(location.search);
+    S.company = trim(qs.get('company')); S.item = trim(qs.get('item')); S.lot = trim(qs.get('lot')); S.period = isoDay(qs.get('period'));
+    if (!S.company || !S.item) { notice('This page shows one item. Open it from the <b>On Hand</b> tab in <a href="transit.html?tab=onhand">In Transit</a> by clicking an item.'); return; }
+    paintScope();
+    $('taWork').hidden = false;
+    gridShell();
+    var f = { companies: [S.company], businessUnits: [], objects: [], subsidiaries: [] };
+    if (S.period) f.period = S.period;
+    // The headline figure and the currency come from reads On Hand and the roll forward already make; either may
+    // fail without costing the roll itself.
+    if (S.period) {
+      rrFetch('in-transit/as-of', { method: 'POST', body: { reconciliationFilter: f } }).then(function (d) {
+        S.onHand = onHandOf(d && d.data); paintScope();
+      }).catch(function (e) { console.warn('In Transit on hand read failed:', errText(e)); });
+      rrFetch('in-transit/reconciliation/rows', { method: 'POST', body: { reconciliationFilter: f } }).then(function (d) {
+        var rows = (d && d.rows) || [];
+        for (var i = 0; i < rows.length; i++) if (trim(rows[i].Currency)) { S.currency = trim(rows[i].Currency); break; }
+        paintScope();
+      }).catch(function (e) { console.warn('In Transit currency read failed:', errText(e)); });
+    }
+    rrFetch('in-transit/as-of/details', { method: 'POST', body: rollBody(S.company, S.item, S.lot) }).then(function (rows) {
+      if (!Array.isArray(rows)) throw new Error('the data service returned a response this page could not read');
+      S.rows = rows; renderGrid();
+    }).catch(function (e) {
+      $('taBody').innerHTML = '<tr><td class="ta-empty is-err" colspan="' + COLS.length + '">The item roll could not be read: ' + esc(errText(e)) + '</td></tr>';
+    });
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
