@@ -127,6 +127,13 @@
        undismissed message loads, so it doesn't affect the normal layout. -->
   <section class="msgcenter" id="msgCenter" hidden aria-label="Messages"></section>
 
+  <!-- What's new — VLC-281 (owner 2026-11-23, "After sign-in"): the release notes of the bundle THIS database runs,
+       from VALC (api/v1/tenant/release-notes). One V8 front end serves every customer, so the sign-in page cannot
+       know whose bundle to show; this is where they go. Per database (loadActiveDbSurfaces), once per user per
+       bundle: it stays until the user dismisses it, and the dismissal is server-side like the Message Center's.
+       Hidden until a card loads, so it doesn't affect the normal layout. -->
+  <section class="msgcenter" id="whatsNew" hidden aria-label="What's new"></section>
+
   <!-- Role header — renders per ACTIVE view-role (body[data-view-role]). Sits
        above the AI briefing band, below the Message Center. UI-245 (owner ruling
        2026-10-29, "greeting for all"): every role opens the same way, a
@@ -684,9 +691,6 @@
        because the To Do LIST is real and live — only its collapsed-band
        headline was painting into markup that does not exist. -->
 
-
-  <!-- What's New — newest customer release notes, pulled live from
-       release-notes.html. Full-width row under the hero. -->
 
   <!-- ============ ADMIN FIRST-RUN WIZARD (onboarding) ============
        Shown only to an admin whose team isn't set up yet (only the seeded
@@ -16746,6 +16750,8 @@
     // client-side review reminder, repainted by loadRefreshSchedule).
     RRV8.setDotState($('schedDot'), 'unknown');
     var sysPill = $('sysPill'); if (sysPill) { sysPill.classList.remove('good', 'warn', 'bad'); sysPill.hidden = true; }
+    // VLC-281: What's new is the prior database's bundle until loadWhatsNew answers for the new one.
+    var wn = $('whatsNew'); if (wn) { wn.hidden = true; wn.innerHTML = ''; }
     var pPill = $('periodPill'); if (pPill) { pPill.hidden = true; pPill.textContent = 'Period: —'; }
     // Team & Access — the users and the access review are the client's, and so is
     // the complex-password review (UI-265: the newest ack on any database), but
@@ -16834,6 +16840,60 @@
     });
   }
 
+  // ---- What's new (VLC-281, owner 2026-11-23 "After sign-in"): the release notes of the bundle the ACTIVE
+  //      database runs, from VALC, until this user dismisses them. VALC decides which bundle (the one whose
+  //      database and Services releases this database runs) and whether this user has dismissed it, so a new
+  //      bundle shows again on its own. Text is rendered ESCAPED (developer-authored), as plain bullets.
+  //      ⚠ RRDB.valcFetch, not rrFetch, ON PURPOSE, as the Message Center does: rrFetch paints Home's failure
+  //      notice, and a reader can do nothing about missing release notes (a VALC older than this route answers
+  //      404), so a failure leaves the card hidden and says nothing. That loses rrFetch's database-switch guard,
+  //      so the answer is painted only while the database it was asked for is still the active one. ----
+  function whatsNewDbName() {
+    var sess = window.RR_SESSION || {};
+    var db = sess.dbs && sess.dbs[sess.activeDbIndex || 0];
+    return (db && db.n) || '';
+  }
+  function loadWhatsNew() {
+    var host = document.getElementById('whatsNew');
+    if (!host) return;
+    var dbName = whatsNewDbName();
+    if (!dbName) { host.hidden = true; host.innerHTML = ''; return; }
+    window.RRDB.valcFetch('/api/v1/tenant/release-notes?database=' + encodeURIComponent(dbName),
+        { headers: prodHeaders(), cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (r) { if (whatsNewDbName() === dbName) renderWhatsNew(host, r && r.whatsNew, dbName); })
+      .catch(function () { /* never block Home on the release notes */ });
+  }
+  function whatsNewDate(iso) {
+    var d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+  function renderWhatsNew(host, w, dbName) {
+    if (!w || w.seen || !w.lines || !w.lines.length) { host.hidden = true; host.innerHTML = ''; return; }
+    var when = whatsNewDate(w.released);
+    host.innerHTML = '<div class="msg-card" data-bundle="' + mcEscape(w.bundleId) + '">'
+      + '<button type="button" class="msg-dismiss" data-whatsnew-dismiss title="Dismiss" aria-label="Dismiss">&times;</button>'
+      + '<p class="msg-subject">What&rsquo;s new in RapidReconciler</p>'
+      + (when ? '<p class="whatsnew-date">Released ' + mcEscape(when) + '</p>' : '')
+      + '<ul class="whatsnew-list">' + w.lines.map(function (l) { return '<li>' + mcEscape(l) + '</li>'; }).join('') + '</ul>'
+      + '</div>';
+    host.hidden = false;
+    var b = host.querySelector('[data-whatsnew-dismiss]');
+    b.addEventListener('click', function () {
+      b.disabled = true;
+      window.RRDB.valcFetch('/api/v1/tenant/release-notes/dismiss', { method: 'POST',
+          headers: prodHeaders('application/json;charset=UTF-8'),
+          body: JSON.stringify({ database: dbName, bundleId: w.bundleId }) })
+        .then(function (r) {
+          // Retired only once VALC recorded it, as the Message Center does; otherwise it would be back on reload.
+          if (!r.ok) { b.disabled = false; return; }
+          host.hidden = true; host.innerHTML = '';
+        })
+        .catch(function () { b.disabled = false; });   // network blip: keep the card
+    });
+  }
+
   // Single source of truth for "paint everything that depends on the active
   // database." Called once on boot (after hydrate) AND on every DB switch, so
   // the two paths can NEVER diverge — every per-DB surface is (re)loaded for the
@@ -16875,6 +16935,7 @@
     loadPeriods();
     loadServiceMemory();
     loadHomeStatusSummary();
+    loadWhatsNew();   // VLC-281: the release notes of the bundle this database runs
   }
 
   function boot() {
