@@ -1450,7 +1450,7 @@
           <li><strong>Identify your JD Edwards source platform.</strong> Oracle, AS/400 (I-Series), or Microsoft SQL Server. Determines which connectivity drivers SSIS will need.</li>
           <li><strong>Provision and configure the required servers.</strong> Hardware, OS, SQL Server, Integration Services, and the supporting tools.</li>
           <li><strong>Apply Windows security and network rules.</strong> Service accounts, antivirus exclusions, firewall rules, and outbound access to GSI hosts.</li>
-          <li><strong>Prepare SQL Server access for the install.</strong> Create the Windows account RapidReconciler&rsquo;s data loads run as. To let GSI install the database unattended, also give GSI a sysadmin login and that account.</li>
+          <li><strong>Prepare SQL Server access for the install.</strong> Your DBA runs a short grant script that creates the <code>rruser</code> login GSI installs with, so GSI never needs a sysadmin login. Create the Windows account RapidReconciler&rsquo;s data loads run as.</li>
           <li><strong>Work through the pre-install checklist</strong> as you complete each step. Mark items as done.</li>
           <li><strong>Gather JD Edwards connection details and submit them to GSI</strong> using the email button at the end of this document, along with your topology and source platform selections and checklist results. GSI will then schedule the install meeting.</li>
         </ol>
@@ -1462,9 +1462,9 @@
           <tr><th>Owner</th><th>Responsibilities</th></tr>
         </thead>
         <tbody>
-          <tr><td>Customer IT</td><td>Server provisioning, OS install, SQL Server install, source platform driver installation on the SSIS server, network and firewall configuration, antivirus exclusions, gathering JDE connection details. <strong>For the database install window:</strong> provide temporary network access to the SQL Server from GSI, and a sysadmin-level SQL install account &mdash; either a SQL login in the <code>sysadmin</code> server role or a Windows account with <code>sysadmin</code> rights. (The SQL Server service account itself does not count.) <strong>Integration Services Catalog:</strong> enable CLR integration, create the <strong>SSISDB catalog</strong> (and <strong>back up its master key</strong>), and create a Windows account for RapidReconciler's SSIS steps &mdash; see the callout below. A sysadmin SQL login and the SSIS account can both be given to GSI in step 7, so the database install can run unattended.</td></tr>
+          <tr><td>Customer IT</td><td>Server provisioning, OS install, SQL Server install, source platform driver installation on the SSIS server, network and firewall configuration, antivirus exclusions, gathering JDE connection details. <strong>For the database install window:</strong> provide temporary network access to the SQL Server from GSI. <strong>Before it:</strong> your DBA runs the <strong>pre-install grant script</strong> in <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">step 7</a> with their own sysadmin login. It creates the <code>rruser</code> SQL login GSI installs with and gives it only what the install needs, so you do not hand GSI a sysadmin login. <strong>Integration Services Catalog:</strong> enable CLR integration, create the <strong>SSISDB catalog</strong> (and <strong>back up its master key</strong>), and create a Windows account for RapidReconciler's SSIS steps &mdash; see the callout below. Your DBA then runs install Script 4 for that account. If you prefer GSI to run Script 4 and the install with a sysadmin login instead, you can give one in step 7; it is optional.</td></tr>
           <tr><td>JDE Owner</td><td>Provide the database server name <strong>and</strong> IP address, credentials, server type, the JDE database name (SQL Server sources), and table qualifier.</td></tr>
-          <tr><td>GSI</td><td><strong>Database install:</strong> GSI installs the RapidReconciler database <em>remotely</em>, connecting to your SQL Server during a scheduled maintenance window. The sequence is: create the database, publish the RapidReconciler V8 schema, create the <code>rruser</code> SQL login the application uses, register the database with GSI, and run install Script 4 to set up the SSIS account (step 7). Every later upgrade of the RapidReconciler V8 database schema connects the same way and needs the same temporary access. GSI&rsquo;s JD Edwards connection test does not use that access: it is sent through the RapidReconciler agent service on your application server and runs on your SQL Server, under the Windows account you set up for Script 4. GSI also handles SSIS package deployment, application install and configuration, an end-to-end smoke test, and the post-install handoff.</td></tr>
+          <tr><td>GSI</td><td><strong>Database install:</strong> GSI installs the RapidReconciler database <em>remotely</em>, connecting to your SQL Server during a scheduled maintenance window. GSI signs in as <code>rruser</code>, the SQL login your DBA created with the grant script. The sequence is: create the database, publish the RapidReconciler V8 schema, and register the database with GSI. If you gave GSI a sysadmin install login instead, GSI also creates <code>rruser</code> and runs install Script 4 to set up the SSIS account (step 7). Every later upgrade of the RapidReconciler V8 database schema connects the same way and needs the same temporary network access. GSI&rsquo;s JD Edwards connection test does not use that access: it is sent through the RapidReconciler agent service on your application server and runs on your SQL Server, under the Windows account you set up for Script 4. GSI also handles SSIS package deployment, application install and configuration, an end-to-end smoke test, and the post-install handoff.</td></tr>
         </tbody>
       </table>
 
@@ -1479,7 +1479,7 @@
         <ul>
           <li><strong>Enable CLR integration</strong> (<code>sp_configure 'clr enabled', 1; RECONFIGURE;</code>). The catalog's components are Microsoft-signed.</li>
           <li><strong>Create the SSISDB catalog</strong> in SQL Server Management Studio (<em>Integration Services Catalogs &rarr; Create Catalog</em>), choosing a master-key password. <strong>Record that password and back up the catalog master key</strong> &mdash; it protects the stored connection passwords, and a restore without it loses them.</li>
-          <li><strong>Create a Windows account for RapidReconciler's SSIS steps.</strong> Deploying the package, setting its connections and running the data refresh all run as this account through a SQL Server Agent proxy that GSI&rsquo;s install Script 4 creates. It needs no Windows group or administrator rights, only <em>Log on as a batch job</em>; check that no Group Policy removes that right. Give the account and its password in <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">step 7</a> and GSI runs Script 4 during the database install, then deletes the password; from then on it is held only in your SQL Server. Leave them out and GSI asks for them at the install meeting. When the password changes, Script 4 has to run again.</li>
+          <li><strong>Create a Windows account for RapidReconciler's SSIS steps.</strong> Deploying the package, setting its connections and running the data refresh all run as this account through a SQL Server Agent proxy that GSI&rsquo;s install Script 4 creates. It needs no Windows group or administrator rights, only <em>Log on as a batch job</em>; check that no Group Policy removes that right. Your DBA runs Script 4 for the account with their sysadmin login, so the password stays with you; it is then held only in your SQL Server. If you give GSI a sysadmin install login in <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">step 7</a>, you can give the account and its password there too, and GSI runs Script 4 during the database install, then deletes the password. When the password changes, Script 4 has to run again.</li>
           <li><strong>Make sure SQL Server Agent is running</strong>, with startup set to Automatic.</li>
         </ul>
         <p>If your organization already runs other SSIS catalog projects, CLR and the catalog are probably in place already. The account and Script 4 are specific to RapidReconciler.</p>
@@ -2565,11 +2565,17 @@
          .rrprep file (never the email text, never browser storage), and VALC deletes both once Script 4 has
          run. The submission's "SQL SERVER — INSTALL ACCESS" section carries them; VALC's
          install-email-parser.js reads its labels, so keep them byte-for-byte.
+         VLC-299 (owner 2026-11-16, re-confirmed 2026-11-22: "Build it, keep both"): the default is now the
+         pre-install grant script below, run by the customer's DBA with their own sysadmin, and the rruser
+         password they choose travels in the same sealed section ("rruser password:"). The sysadmin install
+         login stays as an optional override. VALC quotes the grant script's lines on its readiness rows
+         (RapidReconciler-Valc RruserGrants.java), so a change to a GRANT / ALTER ROLE / CREATE LOGIN line
+         here is a change there too.
     -->
     <section id="topic-sqlaccess" class="view">
       <h1>SQL Server Access for the Install</h1>
-      <p>GSI installs the RapidReconciler database remotely, during a scheduled window (see <a href="javascript:void(0)" onclick="showView('topic-overview')">Who Does What</a>). That install needs two sign-ins on your SQL Server. If you give them here, GSI can run the whole database install without anyone from your team on the call.</p>
-      <p><strong>Both are optional.</strong> Leave them blank and GSI asks for them during the install meeting instead. The install works the same way; it just needs someone with sysadmin rights available at that time.</p>
+      <p>GSI installs the RapidReconciler database remotely, during a scheduled window (see <a href="javascript:void(0)" onclick="showView('topic-overview')">Who Does What</a>). GSI does not need a sysadmin login for it. Before the window, your DBA runs one short script with their own sysadmin login. It creates <code>rruser</code>, the SQL Server login RapidReconciler signs in with, and gives it only what the install needs. GSI then installs the database as <code>rruser</code>.</p>
+      <p>Enter the password your DBA chooses for <code>rruser</code> below. Everything else on this page is <strong>optional</strong>: a sysadmin install login, if you would rather GSI ran the install and install Script 4 with it, and the SSIS account&rsquo;s password, which GSI needs only in that case.</p>
 
       <div class="diamond-divider"><span class="diamond"></span></div>
 
@@ -2580,17 +2586,65 @@
         </thead>
         <tbody>
           <tr>
-            <td><strong>Install login</strong></td>
-            <td>A SQL Server login GSI uses during the install window to create the RapidReconciler database, create the <code>rruser</code> login the application signs in with, and run install Script 4 (below).</td>
-            <td>Member of the <code>sysadmin</code> server role, for example <code>sa</code>. It is a SQL Server login, so it relies on the Mixed Mode authentication listed under <a href="javascript:void(0)" onclick="showView('topic-servers')">Server Requirements</a>.</td>
+            <td><strong><code>rruser</code></strong></td>
+            <td>The SQL Server login RapidReconciler signs in with, for the install and every day after. Your DBA creates it with the grant script below, using the password entered here. It creates the RapidReconciler database, so it owns that database.</td>
+            <td><code>CREATE ANY DATABASE</code> (not <code>dbcreator</code>, which could also change or drop your other databases), <code>VIEW SERVER STATE</code>, the SQL Server Agent operator and reader roles in <code>msdb</code>, and <code>ssis_admin</code> in SSISDB. Not <code>sysadmin</code>. It is a SQL Server login, so it relies on the Mixed Mode authentication listed under <a href="javascript:void(0)" onclick="showView('topic-servers')">Server Requirements</a>.</td>
+          </tr>
+          <tr>
+            <td><strong>Install login</strong> <em>(optional)</em></td>
+            <td>A sysadmin SQL Server login GSI uses <em>instead of</em> <code>rruser</code> to install the database, create <code>rruser</code>, and run install Script 4 (below). Give one only if you prefer that to running the grant script and Script 4 yourself.</td>
+            <td>Member of the <code>sysadmin</code> server role, for example <code>sa</code>.</td>
           </tr>
           <tr>
             <td><strong>SSIS Windows account</strong></td>
-            <td>The account RapidReconciler&rsquo;s data loads run as. The SSIS catalog (SSISDB) does not accept SQL Server logins, so deploying the package, building its environment and every scheduled load run as this Windows account. Install Script 4 stores it in SQL Server as a credential and a SQL Server Agent proxy, both named <code>RapidReconciler SSIS</code>.</td>
+            <td>The account RapidReconciler&rsquo;s data loads run as. The SSIS catalog (SSISDB) does not accept SQL Server logins, so deploying the package, building its environment and every scheduled load run as this Windows account. Install Script 4 stores it in SQL Server as a credential and a SQL Server Agent proxy, both named <code>RapidReconciler SSIS</code>. Script 4 needs a sysadmin, so your DBA runs it, or GSI does with the install login.</td>
             <td>Only the <em>Log on as a batch job</em> right on the server that runs Integration Services. No administrator rights and no Windows group. Script 4 gives it the <code>ssis_admin</code> role in SSISDB itself.</td>
           </tr>
         </tbody>
       </table>
+
+      <h2 id="grant-script">The pre-install grant script</h2>
+      <ol>
+        <li><strong>Create the SSISDB catalog first</strong> (see the Integration Services callout under <a href="javascript:void(0)" onclick="showView('topic-overview')">Who Does What</a>). The script stops and says so if it is missing.</li>
+        <li><strong>Choose the <code>rruser</code> password</strong> and enter it under <em>Your entries</em> below. Use 16 or more letters and digits, and avoid quotes, semicolons and braces: RapidReconciler puts it into its connection settings.</li>
+        <li><strong>Run the script.</strong> In SQL Server Management Studio, connect to the SQL Server with a sysadmin login, open a new query, and turn on <em>Query &rarr; SQLCMD Mode</em>. Paste the script, then add this line at the very top, with the same password: <code>:setvar RR_USER_PASSWORD "the password"</code>. Do not save the file with the password in it. The script ends with <em>rruser is ready for the RapidReconciler install.</em></li>
+        <li><strong>It is safe to run again.</strong> If <code>rruser</code> already exists on this SQL Server (for example, from an earlier RapidReconciler version), the script does not change its password, because other databases may sign in with it. Enter its current password instead; the script checks that it matches and stops if it does not.</li>
+      </ol>
+      <div class="cmd-block"><div class="cmd-line" id="rruser-grant-script">/* RapidReconciler pre-install grant script
+   Run once per SQL Server instance, as a sysadmin, before GSI installs the RapidReconciler database.
+   It creates the rruser login RapidReconciler signs in with, and gives it only what the install needs.
+   In SSMS: Query &gt; SQLCMD Mode, then put this line at the top (do not save the file with the password in it):
+       :setvar RR_USER_PASSWORD "the rruser password you entered in step 7"
+   A single quote in the password must be typed twice. Safe to run again. */
+:on error exit
+SET NOCOUNT ON;
+GO
+IF DB_ID(N'SSISDB') IS NULL
+    THROW 50001, N'Create the SSISDB catalog first (Integration Services Catalogs &gt; Create Catalog), then run this script again.', 1;
+GO
+USE [master];
+IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'rruser')
+    CREATE LOGIN [rruser] WITH PASSWORD = N'$(RR_USER_PASSWORD)', DEFAULT_DATABASE = [master], CHECK_EXPIRATION = OFF, CHECK_POLICY = OFF;
+ELSE IF NOT EXISTS (SELECT 1 FROM sys.sql_logins WHERE name = N'rruser' AND PWDCOMPARE(N'$(RR_USER_PASSWORD)', password_hash) = 1)
+    THROW 50002, N'rruser already exists with a different password. Use its current password here and in step 7. Do not change it: other databases on this server sign in with it.', 1;
+GRANT CREATE ANY DATABASE TO [rruser];
+GRANT VIEW SERVER STATE TO [rruser];
+GO
+USE [msdb];
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'rruser')
+    CREATE USER [rruser] FOR LOGIN [rruser];
+ALTER ROLE [SQLAgentOperatorRole] ADD MEMBER [rruser];
+ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [rruser];
+GO
+USE [SSISDB];
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'rruser')
+    CREATE USER [rruser] FOR LOGIN [rruser];
+ALTER ROLE [ssis_admin] ADD MEMBER [rruser];
+GO
+PRINT N'rruser is ready for the RapidReconciler install.';
+GO</div></div>
+      <p><button type="button" class="back-btn" id="copy-grant-script" onclick="copyGrantScript(this)">Copy the script</button></p>
+      <p>Then your DBA runs <strong>install Script 4</strong> for the SSIS Windows account, the same way, with the same sysadmin login. GSI sends it to you. If you give GSI an install login below, GSI runs Script 4 for you instead.</p>
 
       <h2>Creating the SSIS account</h2>
       <ol>
@@ -2603,7 +2657,8 @@
       <table>
         <thead><tr><th style="width:55%;">Item</th><th>Customer Value</th></tr></thead>
         <tbody>
-          <tr><td>Install login <em>(a SQL Server login in the <code>sysadmin</code> role, e.g. <code>sa</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sql-install-login" aria-label="Install login" placeholder="e.g. sa" autocomplete="off" spellcheck="false"></td></tr>
+          <tr><td><code>rruser</code> password <em>(the one your DBA gives the grant script)</em></td><td class="fill-cell"><input class="fill-input" type="password" id="sql-rruser-pass" aria-label="rruser password" autocomplete="new-password"></td></tr>
+          <tr><td>Install login <em>(optional: a SQL Server login in the <code>sysadmin</code> role, e.g. <code>sa</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sql-install-login" aria-label="Install login" placeholder="e.g. sa" autocomplete="off" spellcheck="false"></td></tr>
           <tr><td>Install login password</td><td class="fill-cell"><input class="fill-input" type="password" id="sql-install-pass" aria-label="Install login password" autocomplete="new-password"></td></tr>
           <tr><td>SSIS Windows account <em>(<code>DOMAIN\account</code>, or <code>.\account</code> for a local account)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="ssis-account" aria-label="SSIS Windows account" placeholder="e.g. CONTOSO\rr_ssis" autocomplete="off" spellcheck="false"></td></tr>
           <tr><td>SSIS account password</td><td class="fill-cell"><input class="fill-input" type="password" id="ssis-pass" aria-label="SSIS account password" autocomplete="new-password"></td></tr>
@@ -2611,14 +2666,15 @@
       </table>
       <div class="callout warning" id="sql-access-seal-note" hidden>
         <div class="callout-label">Password fields are off on this copy</div>
-        <p>This copy of the guide cannot encrypt your submission, so it does not take passwords. Enter the login and the account name, and give GSI the two passwords during the install meeting.</p>
+        <p>This copy of the guide cannot encrypt your submission, so it does not take passwords. Enter the login and the account name, and give GSI the passwords during the install meeting.</p>
       </div>
 
       <div class="callout info">
         <div class="callout-label">How the passwords are handled</div>
         <ul>
           <li>They travel only inside the encrypted file that <strong>Send via Email</strong> downloads in step 9. The email text shows <em>(in the encrypted attachment)</em> in their place, and this page does not save them anywhere.</li>
-          <li>GSI keeps them encrypted until the database install, uses them for that install, and <strong>deletes both as soon as Script 4 has run</strong>. From then on the SSIS account&rsquo;s password is held only in your SQL Server&rsquo;s credential store.</li>
+          <li>GSI keeps the <code>rruser</code> password encrypted on your RapidReconciler record, because RapidReconciler signs in with it every day. If you change it later, send GSI the new one by encrypted email.</li>
+          <li>GSI keeps the install login&rsquo;s and the SSIS account&rsquo;s passwords encrypted until the database install, uses them for that install, and <strong>deletes both as soon as Script 4 has run</strong>. From then on the SSIS account&rsquo;s password is held only in your SQL Server&rsquo;s credential store.</li>
           <li>You can change the install login&rsquo;s password once the install is finished.</li>
           <li>If the SSIS account&rsquo;s password changes later, Script 4 has to be run again with the new password, or the loads stop. GSI can do this for you, or your DBA can run Script 4 in SQL Server Management Studio.</li>
         </ul>
@@ -2891,8 +2947,12 @@
           <label for="c-sqlacc-1">Windows account for RapidReconciler&rsquo;s SSIS steps created, with <em>Log on as a batch job</em> on the server that runs Integration Services and no Group Policy removing it <span class="ref">&mdash; see <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">SQL Server Access</a></span></label>
         </div>
         <div class="checklist-row">
+          <input type="checkbox" id="c-sqlacc-3" class="checklist-item">
+          <label for="c-sqlacc-3">Pre-install grant script run by a sysadmin, ending <em>rruser is ready for the RapidReconciler install</em>, and the <code>rruser</code> password entered in step 7 <span class="ref">&mdash; see <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">SQL Server Access</a></span></label>
+        </div>
+        <div class="checklist-row">
           <input type="checkbox" id="c-sqlacc-2" class="checklist-item">
-          <label for="c-sqlacc-2">Install login and SSIS account entered in step 7, or GSI told they will be given at the install meeting</label>
+          <label for="c-sqlacc-2">SSIS account entered in step 7, and install Script 4 run by your DBA; or a sysadmin install login and the SSIS account&rsquo;s password entered in step 7 so GSI runs it</label>
         </div>
       </div>
 
@@ -3161,7 +3221,29 @@
   };
 
   // VLC-296: the step-7 passwords. They go into the sealed .rrprep file only: never the email text, never storage.
-  var SECRET_FIELD_IDS = ['sql-install-pass', 'ssis-pass'];
+  // VLC-299: and the rruser password the DBA gives the pre-install grant script, sealed the same way.
+  var SECRET_FIELD_IDS = ['sql-rruser-pass', 'sql-install-pass', 'ssis-pass'];
+
+  // VLC-299: copies the pre-install grant script as text (the page shows it with &gt; escaped).
+  function copyGrantScript(btn) {
+    var el = document.getElementById('rruser-grant-script');
+    if (!el) return;
+    var text = el.textContent;
+    var done = function () { if (btn) { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy the script'; }, 2000); } };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { selectGrantScript(el); });
+    } else {
+      selectGrantScript(el);
+    }
+  }
+  function selectGrantScript(el) {
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  window.copyGrantScript = copyGrantScript;   // the button's onclick; this script runs inside an IIFE
 
   // Server fields keyed by topology — each entry has a friendly label, the
   // server-name input id, and the internal-IP input id. Both name and IP are
@@ -3779,6 +3861,8 @@
       // VLC-296 (owner 2026-11-17): read by VALC's import (install-email-parser.js). Keep the header and labels
       // byte-for-byte. Optional: blank fields mean GSI asks for them at the install meeting.
       'SQL SERVER — INSTALL ACCESS',
+      // VLC-299: the password the DBA gave the pre-install grant script; VALC signs in as rruser with it.
+      '  rruser password:               ' + secret('sql-rruser-pass'),
       '  Install login (sysadmin):      ' + v('sql-install-login'),
       '  Install login password:        ' + secret('sql-install-pass'),
       '  SSIS Windows account:          ' + v('ssis-account'),
