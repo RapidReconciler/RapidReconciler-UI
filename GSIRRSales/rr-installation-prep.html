@@ -2760,6 +2760,8 @@ go</div></div>
       <table>
         <thead><tr><th style="width:55%;">Item</th><th>Customer Value</th></tr></thead>
         <tbody>
+          <!-- VLC-323: step 3 asks the DBA to note a named instance's port; until 2026-11-24 nothing collected it. -->
+          <tr><td>SQL Server port <em>(the RapidReconciler SQL Server&rsquo;s TCP port; leave blank for 1433. A named instance needs a fixed port: enter it here)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sql-port" aria-label="SQL Server port" placeholder="1433" inputmode="numeric" autocomplete="off"></td></tr>
           <tr><td><code>rruser</code> password <em>(the one your DBA gives the grant script)</em></td><td class="fill-cell"><input class="fill-input" type="password" id="sql-rruser-pass" aria-label="rruser password" autocomplete="new-password"></td></tr>
           <tr><td>Install login <em>(optional: a SQL Server login in the <code>sysadmin</code> role, e.g. <code>sa</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sql-install-login" aria-label="Install login" placeholder="e.g. sa" autocomplete="off" spellcheck="false"></td></tr>
           <tr><td>Install login password</td><td class="fill-cell"><input class="fill-input" type="password" id="sql-install-pass" aria-label="Install login password" autocomplete="new-password"></td></tr>
@@ -3107,9 +3109,13 @@ go</div></div>
         <tbody>
           <tr><td>Host name of the JDE data server or data warehouse <em>(or the Oracle TNS name / AS400 system name)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-server" aria-label="JDE data server host name" placeholder="e.g. JDEPROD01.contoso.local"></td></tr>
           <tr><td>IP address of the JDE data server <em>(as well as the name above &mdash; we use the name to recognise the machine and the address to reach it)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-server-ip" aria-label="JDE data server IP address" placeholder="e.g. 10.0.1.9"></td></tr>
+          <!-- VLC-323: the port, and an Oracle source's service name. GSI's VALC dials the IP above, so without them it
+               cannot reach a SQL Server off 1433 or name an Oracle service. -->
+          <tr><td>Port of the JDE database <em>(leave blank for the default: 1433 for SQL Server, 1521 for Oracle; AS400 needs none)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="jde-port" aria-label="JDE database port" placeholder="default" inputmode="numeric" autocomplete="off"></td></tr>
           <tr><td>Database username <em>(use <code>rapidrec</code> if possible)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-user" aria-label="Database username"></td></tr>
-          <tr><td>Database password <em>(use <code>rapidrec</code> if possible)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-pass" aria-label="Database password"></td></tr>
+          <tr><td>Database password <em>(use <code>rapidrec</code> if possible)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="password" id="jde-pass" aria-label="Database password" autocomplete="new-password"></td></tr>
           <tr><td>JDE database name <em>(Microsoft SQL Server sources only, e.g. <code>JDE_PRODUCTION</code>; leave blank for Oracle or AS400)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-database" aria-label="JDE database name" placeholder="e.g. JDE_PRODUCTION"></td></tr>
+          <tr id="jde-oracle-service-row" hidden><td>Oracle service name <em>(required for Oracle: the service your JDE database registers with its listener, e.g. <code>JDEPROD</code>; your DBA finds it in <code>tnsnames.ora</code> as <code>SERVICE_NAME</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="jde-oracle-service" aria-label="Oracle service name" placeholder="e.g. JDEPROD" autocomplete="off" spellcheck="false"></td></tr>
           <tr><td>JDE server type <em>(auto-fills from your <a href="javascript:void(0)" onclick="showView('topic-source')">source platform</a> selection — edit if your environment differs)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-type" aria-label="JDE server type"></td></tr>
           <tr><td>Table qualifier name <em>(e.g., <code>proddta</code>)</em></td><td class="fill-cell"><input class="fill-input jde-field" type="text" id="jde-qualifier" aria-label="Table qualifier name"></td></tr>
         </tbody>
@@ -3512,7 +3518,22 @@ go</div></div>
     for (var i = 0; i < JDE_FIELD_IDS.length; i++) {
       if (!getValue(JDE_FIELD_IDS[i])) n++;
     }
+    // VLC-323: an Oracle source needs its service name; a port, when given, has to be one.
+    if (getSelectedSource() === 'oracle' && !getValue('jde-oracle-service')) n++;
+    for (var p = 0; p < PORT_FIELD_IDS.length; p++) {
+      if (!portOk(PORT_FIELD_IDS[p])) n++;
+    }
     return n;
+  }
+
+  // VLC-323: the two optional port fields. Blank means the default; anything else must be 1 to 65535.
+  var PORT_FIELD_IDS = ['sql-port', 'jde-port'];
+  function portOk(id) {
+    var s = getValue(id);
+    var ok = s === '' || (/^\d{1,5}$/.test(s) && +s >= 1 && +s <= 65535);
+    var el = getField(id);
+    if (el) el.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    return ok;
   }
 
   // ============================================================
@@ -3883,6 +3904,10 @@ go</div></div>
       }
     }
 
+    // VLC-323: the Oracle service name row shows only for an Oracle source.
+    var oraRow = getField('jde-oracle-service-row');
+    if (oraRow) oraRow.hidden = src !== 'oracle';
+
     // Pre-fill the JDE server type field on the submit page if the user
     // has not already entered something different
     var typeField = getField('jde-type');
@@ -4075,16 +4100,21 @@ go</div></div>
       'JD EDWARDS — CONNECTION DETAILS',
       '  JDE data server / warehouse:   ' + v('jde-server'),
       '  JDE data server IP:            ' + v('jde-server-ip'),
+      // VLC-323: read by VALC's import (install-email-parser.js); digits only, anything else is the default.
+      '  JDE database port:             ' + (getValue('jde-port') || 'default'),
       '  Database username:             ' + v('jde-user'),
       '  Database password:             ' + (sealed ? '(in the encrypted attachment)' : v('jde-pass')),
       '  JDE server type:               ' + v('jde-type'),
       // VLC-296 (owner 2026-11-16): VALC's import fills the JDE Source card's JDE Database from this line.
-      '  JDE database:                  ' + v('jde-database'),
+      '  JDE database:                  ' + v('jde-database')
+    ]).concat(src === 'oracle' ? ['  Oracle service name:           ' + v('jde-oracle-service')] : []).concat([
       '  Table qualifier:               ' + v('jde-qualifier'),
       '',
       // VLC-296 (owner 2026-11-17): read by VALC's import (install-email-parser.js). Keep the header and labels
       // byte-for-byte. Optional: blank fields mean GSI asks for them at the install meeting.
       'SQL SERVER — INSTALL ACCESS',
+      // VLC-323: VALC puts it on the SQL host's card; digits only, anything else is 1433.
+      '  SQL Server port:               ' + (getValue('sql-port') || '1433 (default)'),
       // VLC-299: the password the DBA gave the pre-install grant script; VALC signs in as rruser with it.
       '  rruser password:               ' + secret('sql-rruser-pass'),
       '  Install login (sysadmin):      ' + v('sql-install-login'),
@@ -4265,6 +4295,11 @@ go</div></div>
       var el = getField(JDE_FIELD_IDS[i]);
       if (el) el.addEventListener('input', validateForm);
     }
+    // VLC-323: the port fields and the Oracle service name gate Send too.
+    ['sql-port', 'jde-port', 'jde-oracle-service'].forEach(function (id) {
+      var f = getField(id);
+      if (f) f.addEventListener('input', validateForm);
+    });
     // VLC-300: the single sign-on rows follow the identity provider, and the redirect URI's ending the hostname.
     var ssoProto = getField('sso-protocol');
     if (ssoProto) ssoProto.addEventListener('change', applySsoVisibility);
