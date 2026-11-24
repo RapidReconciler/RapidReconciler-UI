@@ -123,7 +123,7 @@ footer{background:var(--navy-deep);color:rgba(255,255,255,0.7);padding:18px 0;fo
 <ul>
   <li><strong>Source of schema:</strong> the SSDT project <code>RapidReconciler.sqlproj</code> in the <code>RapidReconciler-DB</code> repo, built to a <strong><code>RapidReconciler.dacpac</code></strong> (desired-state artifact).</li>
   <li><strong>Login:</strong> <code>rruser</code> &mdash; the least-privilege application + load login (SSIS writes as it, the Services jar reads as it).</li>
-  <li><strong>Deploy:</strong> the Release Bundles page applies the dacpac per customer via <strong>SqlPackage</strong>, which diffs the dacpac against that customer&rsquo;s live schema and generates the exact upgrade script (so drift is handled, not assumed).</li>
+  <li><strong>Deploy:</strong> the Release Bundles page applies the dacpac per customer via <strong>SqlPackage</strong>, which diffs the dacpac against that customer&rsquo;s live schema and generates the exact upgrade script (so drift is handled, not assumed). SqlPackage runs on the customer&rsquo;s application server, started by the RR broker as the database&rsquo;s own <code>rruser</code> login (&sect;9).</li>
   <li><strong>Recovery:</strong> <strong>SIMPLE</strong> &mdash; the database is reloaded from JDE, so point-in-time log recovery is not needed (&sect;5).</li>
 </ul>
 <div class="callout note">
@@ -358,6 +358,7 @@ EXEC dbo.usp6_001_run_b_to_c
 <section id="deploy">
 <h2>9. Deploy model</h2>
 <p>The database ships as a <strong>dacpac</strong> &mdash; a desired-state artifact, not a frozen migration script. The Release Bundles page applies it per customer with <strong>SqlPackage</strong>, which diffs the dacpac against that customer&rsquo;s current live schema and generates the exact upgrade script at deploy time. Drift (an extra index, a hand-added column) is reconciled, not assumed away.</p>
+<p><strong>Where SqlPackage runs (VLC-151, broker 2.11.0).</strong> On the customer&rsquo;s application server, never on VALC&rsquo;s own host: VALC 2.0 cannot reach a customer&rsquo;s SQL Server. VALC sends the broker one of three commands (<code>DACPAC_SCRIPT</code>, <code>DACPAC_REPORT</code>, <code>DACPAC_PUBLISH</code>) naming the release by its id and SHA-1. The broker fetches the dacpac over its file channel, checks the SHA-1, and runs SqlPackage with a fixed set of options as the database&rsquo;s own <code>rruser</code> login, held in a one-run profile file only its own account can read. A publish holds the database&rsquo;s activity lease (<code>usp8_activity_begin 'DB_DEPLOY'</code>) for the whole run, so a reconciliation pass cannot start mid-deploy, and a busy database refuses the publish with the holder&rsquo;s name. The V8 agent setup downloads Microsoft&rsquo;s SqlPackage into <code>&lt;install&gt;\sqlpackage</code> and accepts it only with Microsoft&rsquo;s valid signature; GSI does not ship it.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Step</th><th>What happens</th></tr></thead>
 <tbody>
