@@ -226,6 +226,7 @@ async function main() {
     const html = h.byId('admDayList').innerHTML;
     check('D1 a band with no rows uses its own words (Licensing\'s days left)', /45 days left/.test(html));
     check('D1 the count says 3', h.byId('admDayCount').textContent === '3');
+    check('T1 the day band is tinted red when its worst item is a problem', h.byId('adminBrief').getAttribute('data-state') === 'attention');
     check('D2 row text is escaped', /Data loads: &lt;b&gt;late&lt;\/b&gt;/.test(html) && !/<b>late/.test(html));
     check('D3 Explain shows on a plan with AI', (html.match(/data-day-explain=/g) || []).length === 3);
     check('D1 each item opens its page', /href="admin-users.html"/.test(html) && /href="admin-companies.html"/.test(html) && /href="admin-data-refresh.html"/.test(html));
@@ -243,9 +244,14 @@ async function main() {
     const h = harness();
     h.t.day();
     check('D4 a dot still unknown: Checking', /Checking/.test(h.byId('admDayList').innerHTML), h.byId('admDayList').innerHTML);
+    check('T1 untinted while a band is still checking', h.byId('adminBrief').getAttribute('data-state') == null);
     allOk(h); h.t.day();
     check('D4 every band clear: Nothing needs you today', /Nothing needs you today\./.test(h.byId('admDayList').innerHTML)
       && h.byId('admDayCount').textContent === '');
+    check('T1 green when nothing needs you', h.byId('adminBrief').getAttribute('data-state') === 'ok');
+    setRow(h, 'teamReviewRow', 'todo', 'Access review is due'); h.t.day();
+    check('T1 amber when something waits', h.byId('adminBrief').getAttribute('data-state') === 'watch');
+    setRow(h, 'teamReviewRow', 'ok', 'Access review is up to date');
     setRow(h, 'dataPurgeRow', 'attention', 'Storage runs out in 20 days'); h.t.day();
     check('D5 an instance-health chip is listed', /Instance health/.test(h.byId('admDayList').innerHTML) && /Storage runs out in 20 days/.test(h.byId('admDayList').innerHTML));
   }
