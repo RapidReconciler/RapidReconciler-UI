@@ -996,7 +996,7 @@ answered (`Tools/test-connection-check-topology.js`).
 
 ## What's new: the active database's release notes (VLC-281)
 
-**Status: BUILT, not yet merged.** Owner ruling 2026-11-23, "After sign-in": one V8 front end serves every customer
+**Status: MERGED 2026-11-23 (UI #1187, Valc #869).** Owner ruling 2026-11-23, "After sign-in": one V8 front end serves every customer
 in an environment, so the sign-in page cannot show a customer their own bundle's release notes. Home shows them
 instead, in a **What's new in RapidReconciler** card above everything (`#whatsNew`, under the Message Center), once
 per user per bundle.
@@ -1046,6 +1046,56 @@ a 200, so a refusal or a network blip leaves it to show again.
 
 ---
 
+## The customer's contacts and Send Invoices To (UI-269)
+
+**Status: BUILT, not yet merged.** Owner 2026-11-13 ("Add a new band for contacts that the admin can change that will
+sync to valc ... plus add a new 'Send Invoices To' email slot"), rulings 2026-11-24. The contacts are the ones on
+VALC's client card (`clients.contact_1_email`, `contact_2_email`, `contact_2_name`, and since V135
+`send_invoices_to`). Both routes take the client from the bearer token and accept no client id.
+
+**Callers:** `home.html` (Administrator home, **Contacts** band: `loadContacts()` from `loadActiveDbSurfaces`,
+`saveContacts()` on Save) and `admin-users.html` (RR Team page's contacts band, which sends only the two emails).
+
+### `GET api/v1/tenant/client`
+
+Any signed-in user of the client.
+
+```json
+{ "id": 1, "name": "Acme", "contact1Email": "sponsor@acme.example", "contact2Email": "it@acme.example",
+  "contact2Name": "Pat Admin", "sendInvoicesTo": "ap@acme.example" }
+```
+
+Every contact is `null` when not given.
+
+### `PATCH api/v1/tenant/client/contacts`
+
+**Administrator only** (ruling 2026-11-24): the caller's role must carry administration (`roles.tab_admin`, the rule
+Team & Access uses). Answers the same shape as the GET.
+
+| Field | Sent | Effect |
+|---|---|---|
+| `contact1Email`, `contact2Email` | always | set; blank or `null` clears |
+| `contact2Name` | optional | `null` or absent leaves it; blank clears |
+| `sendInvoicesTo` | optional | `null` or absent leaves it; blank clears. The RR Team page does not send it, so its save keeps it |
+
+Editing Contact 2 changes only the address on the client card. The RR Administrator login seeded at install is a user,
+managed in Team & Access, and this route does not touch it (ruling 2026-11-24).
+
+| Status | `message` |
+|---|---|
+| 400 | `body is required` |
+| 401 | `Sign in first.` / `Unknown or removed user.` |
+| 403 | `Changing your contacts needs the Administrator role on your account.` |
+| 404 | `No client is assigned to this user.` |
+
+### `GET api/v1/tenant/license-usage?database=` carries `sendInvoicesTo`
+
+The Licensing page (`admin-companies.html`) adds `Send invoices to: <address>` to the body of its request-invoice email
+to `accounting@getgsi.com` when the field is set. VALC sends no email to the address (measured 2026-11-24: VALC has no
+invoice or renewal notice).
+
+---
+
 ## AI feature levels (VLC-234)
 
 The AI gateway is VALC (`RR_VALC_PREFIXES` carries `api/v1/ai/`); the Anthropic key never reaches the browser.
@@ -1065,7 +1115,7 @@ database with nothing set counting as Off.
 | `explain` | Explain a finding | accountant company analysis, Transactions analyzer, cardex Investigate, Model DMAAI review |
 | `ask` | Ask a question | Home ask box (analyst + accountant), As Of ask box and pills |
 | `drafting` | Entry and report drafting | offset + balancing entry AI lines, audit report cover, both residual optimizers |
-| `admin` | Administrator assistant | admin Home Ask-AI pills |
+| `admin` | Administrator assistant | admin Home, Here's your day's Explain (UI-269; the Ask-AI pills before it) |
 
 Levels use VALC's vocabulary `off | docs | scrubbed | full`; V8 sends `grounded` for `docs` and VALC accepts both.
 
