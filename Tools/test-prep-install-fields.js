@@ -4,9 +4,12 @@
  *
  *   F1  The SQL Server port, the JDE database port and (Oracle only) the Oracle service name are written into the
  *       submission, on the lines and labels RapidReconciler-Valc install-email-parser.js reads.
- *   F2  Left blank, the ports read as the default ("default", "1433 (default)"), which the parser takes as no port.
+ *   F2  Ports are specified, never a default (owner 2026-11-24): a SQL Server source writes "JDE database port: 1433",
+ *       filled in from the platform, and no Oracle line; an AS400 source hides the JDE port and writes "not used".
  *   F3  The Oracle service name row shows only for an Oracle source, and Send stays off for Oracle until it is filled.
- *   F4  A port that is not 1 to 65535 keeps Send off.
+ *   F4  A blank SQL Server port, or a port that is not 1 to 65535, keeps Send off.
+ *   F7  The JDE port fills with 1433 or 1521 as the platform changes, and a port the customer typed survives a change.
+ *   F8  The SQL Server port starts at 1433 in the markup (the fake DOM below has no markup to ask).
  *   F5  Sealed (VLC-298): the file opens to the full text, ports and password included; the email text carries the
  *       ports and names the attachment where the password was.
  *   F6  The JDE password box masks what is typed.
@@ -130,7 +133,8 @@ function fill(p, source) {
   const v = {
     'jde-server': 'JDEORA01', 'jde-server-ip': '10.0.1.9', 'jde-user': 'rapidrec', 'jde-pass': 'Ora;pw 9',
     'jde-qualifier': 'PRODDTA', 'sub-company': 'Acme', 'sub-name': 'Pat Lee', 'sub-title': 'DBA',
-    'sub-email': 'pat@acme.example', 'sub-date': '2026-11-24'
+    'sub-email': 'pat@acme.example', 'sub-date': '2026-11-24',
+    'sql-port': '1433'   // what the markup starts it at (F8)
   };
   Object.keys(v).forEach((id) => p.type(id, v[id]));
 }
@@ -169,14 +173,34 @@ async function run(scriptSrc, label) {
     const t = p.clipboard() || '';
     r.f1 = t.includes(LINE.jdePort) && t.includes(LINE.oracle) && t.includes(LINE.sqlPort);
     r.f1detail = t.split('\r\n').filter((l) => /port|service/i.test(l)).join(' | ');
-    // F2 needs a fresh page: blank ports, and a SQL Server source writes no Oracle line.
+    // F2 needs fresh pages: a SQL Server source's ports are numbers, filled in, with no Oracle line; AS400 has no port.
     const q = boot(scriptSrc);
     fill(q, 'sqlserver');
     await q.window.copyJdeText();
     const u = q.clipboard() || '';
-    r.f2 = u.includes('  JDE database port:             default') && u.includes('  SQL Server port:               1433 (default)')
-      && !/Oracle service name/.test(u);
-    r.f2detail = u.split('\r\n').filter((l) => /port|service/i.test(l)).join(' | ');
+    const s = boot(scriptSrc);
+    fill(s, 'as400');
+    const asHidden = s.el('jde-port-row').hidden === true;
+    const asSend = s.el('send-email-btn').disabled === false;
+    await s.window.copyJdeText();
+    const w = s.clipboard() || '';
+    r.f2 = u.includes('  JDE database port:             1433') && u.includes('  SQL Server port:               1433')
+      && !/Oracle service name/.test(u) && asHidden && asSend && w.includes('  JDE database port:             not used (AS400)');
+    r.f2detail = u.split('\r\n').filter((l) => /port|service/i.test(l)).join(' | ') + ' || AS400 hidden=' + asHidden
+      + ' send=' + asSend + ' | ' + w.split('\r\n').filter((l) => /JDE database port/.test(l)).join('');
+  }
+  // F7: the JDE port follows the platform until the customer types one.
+  {
+    const p = boot(scriptSrc);
+    fill(p, 'sqlserver');
+    const a = p.el('jde-port').value;
+    p.pick('source-choice', 'oracle');
+    const b = p.el('jde-port').value;
+    p.type('jde-port', '1600');
+    p.pick('source-choice', 'sqlserver');
+    const c = p.el('jde-port').value;
+    r.f7 = a === '1433' && b === '1521' && c === '1600';
+    r.f7detail = JSON.stringify({ sqlserver: a, oracle: b, typedThenSqlserver: c });
   }
   // F3 + F4: the row, and Send.
   {
@@ -192,14 +216,18 @@ async function run(scriptSrc, label) {
     const oraSend = p.el('send-email-btn').disabled === false;
     r.f3 = sqlHidden && sqlSend && oraShown && oraBlocked && oraSend;
     r.f3detail = JSON.stringify({ sqlHidden, sqlSend, oraShown, oraBlocked, oraSend, status: p.el('submit-status').textContent });
+    p.type('sql-port', '');
+    const blankBlocked = p.el('send-email-btn').disabled === true;
     p.type('sql-port', '99999');
     const badBlocked = p.el('send-email-btn').disabled === true;
     p.type('sql-port', '1500');
     const goodSend = p.el('send-email-btn').disabled === false;
     p.type('jde-port', 'abc');
     const badJde = p.el('send-email-btn').disabled === true;
-    r.f4 = badBlocked && goodSend && badJde;
-    r.f4detail = JSON.stringify({ badBlocked, goodSend, badJde });
+    p.type('jde-port', '');
+    const blankJde = p.el('send-email-btn').disabled === true;
+    r.f4 = blankBlocked && badBlocked && goodSend && badJde && blankJde;
+    r.f4detail = JSON.stringify({ blankBlocked, badBlocked, goodSend, badJde, blankJde });
   }
   // F5: sealed to a key made for this run.
   {
@@ -230,9 +258,12 @@ async function run(scriptSrc, label) {
   console.log('Shipped page:');
   const r = await run(src);
   check('F1 the SQL port, JDE port and Oracle service name are in the submission', r.f1, r.f1detail);
-  check('F2 blank ports read as the default, and a SQL Server source writes no Oracle line', r.f2, r.f2detail);
+  check('F2 the ports are written as numbers, no Oracle line on SQL Server, and AS400 says the port is not used', r.f2, r.f2detail);
   check('F3 the Oracle service row follows the source, and Send waits for it on Oracle', r.f3, r.f3detail);
-  check('F4 a port outside 1 to 65535 keeps Send off', r.f4, r.f4detail);
+  check('F4 a blank SQL or JDE port, or one outside 1 to 65535, keeps Send off', r.f4, r.f4detail);
+  check('F7 the JDE port fills from the platform and keeps a typed port', r.f7, r.f7detail);
+  const sqlTag = (/<input[^>]*\bid="sql-port"[^>]*>/.exec(HTML) || [''])[0];
+  check('F8 the SQL Server port starts at 1433', /\bvalue="1433"/.test(sqlTag), sqlTag);
   check('F5 seam: PREP_RECIPIENTS replaced in memory', r.sealSeam);
   check('F5 the sealed file opens to the ports and the password; the email text has the ports, not the password', r.f5, r.f5detail);
   // F6 is markup: the browser masks a type="password" input, and the fake DOM has no markup to ask.
@@ -241,10 +272,16 @@ async function run(scriptSrc, label) {
   if (process.argv[2] === '--dump-sealed') fs.writeFileSync(process.argv[3], r.plain, 'utf8');
 
   console.log('Arm: the JDE port line removed from buildBody');
-  const armed = src.replace(/\s*'  JDE database port:\s+' \+ \(getValue\('jde-port'\) \|\| 'default'\),/, '');
+  const armed = src.replace(/\s*'  JDE database port:\s+' \+ \(src === 'as400' \? 'not used \(AS400\)' : v\('jde-port'\)\),/, '');
   check('arm applied', armed !== src);
   const a = await run(armed);
   check('arm: F1 goes red without the line', !a.f1, a.f1detail);
+
+  console.log('Arm: the JDE port autofill removed');
+  const armed2 = src.replace('portField.value = JDE_PORT_DEFAULT[src];', '');
+  check('arm 2 applied', armed2 !== src);
+  const a2 = await run(armed2);
+  check('arm 2: F7 goes red without the autofill', !a2.f7, a2.f7detail);
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);
