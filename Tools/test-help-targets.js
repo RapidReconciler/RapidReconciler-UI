@@ -41,12 +41,25 @@ function check(name, ok, detail) {
 }
 
 console.log('H1 every V8 help "?" shows one section of a file that exists (' + pages.length + ' pages)');
+// A page's triggers: the "?" (<body data-help-src>) or a legacy .help-pill, and every band's .band-help pill
+// (Administrator Home, 2026-11-25). A page with band pills and no "?" target is checked on its pills alone.
+let bandPills = 0;
 for (const p of pages) {
-  const r = panelView(p);
-  check('H1 ' + p + ' -> ' + (r.src || '?') + (r.view ? '  [' + r.view + ']' : ''),
-    !r.error && r.landed && r.text && r.text.length > 200,
-    r.error || (!r.landed ? 'the anchor is not in the section the panel shows' : 'shows only ' + (r.text || '').length + ' characters'));
+  const html = read(p);
+  const band = [...html.matchAll(/<button\b[^>]*\bclass="band-help"[^>]*>/g)]
+    .map((m) => (m[0].match(/\sdata-help-src="([^"]*)"/) || [])[1]).filter(Boolean);
+  bandPills += band.length;
+  const hasMain = /<body\b[^>]*\sdata-help-src="/.test(html) || /<button\b[^>]*\bclass="help-pill"[^>]*\sdata-help-src="/.test(html);
+  const runs = (hasMain || !band.length ? [undefined] : []).concat(band);
+  for (const src of runs) {
+    const r = panelView(p, src ? { src } : undefined);
+    check('H1 ' + p + ' -> ' + (r.src || '?') + (r.view ? '  [' + r.view + ']' : ''),
+      !r.error && r.landed && r.text && r.text.length > 200,
+      r.error || (!r.landed ? 'the anchor is not in the section the panel shows' : 'shows only ' + (r.text || '').length + ' characters'));
+  }
 }
+// The Administrator Home has five bands, each with a Help pill. Zero here means the pattern above stopped matching.
+if (bandPills < 5) { console.log('HARNESS BROKEN: found ' + bandPills + ' band Help pills, expected at least 5'); process.exit(1); }
 
 // ---------------------------------------------------------------------------------------------------------------
 // H2/H3/H4 per rewritten page. `labels` are read OUT OF THE PAGE (or a file it loads) by a stable selector, so a
