@@ -86,7 +86,9 @@ function panelView(page, opts) {
   // .help-pill[data-help-src] button (accounting-dmaais.html still uses one).
   const body = pageHtml.match(/<body\b[^>]*>/);
   const pill = pageHtml.match(/<button\b[^>]*\bclass="help-pill"[^>]*>/);
-  const src = (body && attrOf(body[0], 'data-help-src')) || (pill && attrOf(pill[0], 'data-help-src'));
+  // `opts.src` names one trigger's target directly: a band's .band-help pill (help-sidebar.js, 2026-11-25), of
+  // which a page can carry several, each opening its own section.
+  const src = (opts && opts.src) || (body && attrOf(body[0], 'data-help-src')) || (pill && attrOf(pill[0], 'data-help-src'));
   if (!src) return { page, error: 'no data-help-src on <body> or a .help-pill' };
   const frameSrc = embedFn()(src);
   const rel = frameSrc.replace(/[?#].*$/, '');
