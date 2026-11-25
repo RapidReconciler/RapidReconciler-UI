@@ -7,6 +7,10 @@
         to .topbar-home, from <body data-help-src> / <body data-help-title>.
      2. Legacy: any .help-pill[data-help-src] in the page (being
         migrated to the circle page-by-page).
+     3. Band: a .band-help[data-help-src] button on a band's head (the
+        Administrator home's bands, owner 2026-11-25, like VALC's band
+        Help links). It opens the panel at that band's section; clicking
+        it again closes it. While its section is open it reads "Hide help".
 
    - data-help-src   : doc URL, may include a #topic hash.
    - data-help-title : panel title bar text.
@@ -117,13 +121,14 @@
 
   function init() {
     var pills = document.querySelectorAll('.help-pill[data-help-src]');
+    var bandPills = document.querySelectorAll('.band-help[data-help-src]');
     var bodySrc = document.body.getAttribute('data-help-src');
     // A page may declare the GLOSSARY alone, with no doc. The analyst work pages
     // (Home, Transaction Variance, Cardex Variance) have no help doc of their own
     // and are exactly where the vocabulary questions get asked.
     var wantsGloss = document.body.hasAttribute('data-help-glossary')
                   && !!(window.RRV8 && window.RRV8.GLOSSARY);
-    if (!pills.length && !bodySrc && !wantsGloss) return;
+    if (!pills.length && !bandPills.length && !bodySrc && !wantsGloss) return;
 
     var helpBtn = null;  // the header "?" trigger, if this page has one
 
@@ -160,6 +165,18 @@
 
     function isOpen() { return drawer.classList.contains('is-open'); }
 
+    // The band pill whose section the panel shows, or null. Any other way of opening or closing the panel clears it.
+    var activeBand = null;
+    function paintBandPills() {
+      for (var i = 0; i < bandPills.length; i++) {
+        var on = isOpen() && bandPills[i] === activeBand;
+        bandPills[i].classList.toggle('is-on', on);
+        bandPills[i].setAttribute('aria-expanded', on ? 'true' : 'false');
+        var label = bandPills[i].querySelector('span');
+        if (label) label.textContent = on ? 'Hide help' : 'Help';
+      }
+    }
+
     function show(el, on) { if (el) el.hidden = !on; }
     function openGlossary() {
       titleEl.textContent = 'Terms on this page';
@@ -172,9 +189,10 @@
       document.documentElement.classList.add('help-open');
       drawer.classList.add('is-open');
       if (helpBtn) helpBtn.setAttribute('aria-expanded', 'true');
+      activeBand = null; paintBandPills();
     }
 
-    function openSrc(src, title) {
+    function openSrc(src, title, band) {
       titleEl.textContent = title || 'How this works';
       var want = embedSrc(src);
       // Reload only when the target changes — keeps the panel snappy on reopen.
@@ -183,6 +201,7 @@
       document.documentElement.classList.add('help-open');  // reflow the page beside the panel
       drawer.classList.add('is-open');
       if (helpBtn) helpBtn.setAttribute('aria-expanded', 'true');
+      activeBand = band || null; paintBandPills();
       // Companion panel: do NOT move focus — the page keeps the user's focus.
     }
 
@@ -190,6 +209,7 @@
       document.documentElement.classList.remove('help-open');
       drawer.classList.remove('is-open');
       if (helpBtn) helpBtn.setAttribute('aria-expanded', 'false');
+      activeBand = null; paintBandPills();
     }
 
     // Standard trigger: inject the "?" circle into the header next to Home.
@@ -262,6 +282,16 @@
           openSrc(p.getAttribute('data-help-src'), p.getAttribute('data-help-title'));
         });
       })(pills[i]);
+    }
+    // Band pills toggle their own section. stopPropagation: the pill sits in a band head that folds on click.
+    for (var j = 0; j < bandPills.length; j++) {
+      (function (p) {
+        p.addEventListener('click', function (e) {
+          e.stopPropagation();
+          if (isOpen() && activeBand === p) { close(); return; }
+          openSrc(p.getAttribute('data-help-src'), p.getAttribute('data-help-title'), p);
+        });
+      })(bandPills[j]);
     }
     // Both a doc AND a glossary: one head toggle rather than a second trigger in
     // the page chrome. The panel is already the place the reader is looking.

@@ -18,7 +18,8 @@
  *   D3  Explain shows only when the plan includes AI (not on 'off', not while the plan is unknown)
  *   D4  nothing to do: "Checking..." while a dot is unknown, then "Nothing needs you today."
  *   D5  an instance-health chip that needs the administrator is listed
- *   B1  a folded band's head counts its needs and names the first; a clear band says so
+ *   B1  a folded band's pill counts its needs and its line names the first; a clear band says so and what it holds
+ *   H1  every band head has a Help pill, outside the fold button, naming one section that exists in its doc
  *   B2  a band opens and closes, and the open set survives a repaint (this browser only)
  *   C1  the Contacts dot is to-do and names what is missing; complete contacts are ok
  *   C2  Save sends all four fields (blank as ''), refuses a malformed address before any request
@@ -211,6 +212,20 @@ async function main() {
     const dotsInHead = ['licenseDot', 'teamDot', 'activityDot', 'tsDot', 'contactsDot'].filter(id => !h.byId(id).closest('.adm-band-head'));
     check('M1 each band\'s dot is in its head', dotsInHead.length === 0, dotsInHead.join(', '));
     check('M1 the AI ask pills are gone', !/admin-ask-pill|id="adminAskBar"/.test(MARKUP));
+    // H1: every band head has a Help pill naming a section that exists in the doc it opens. The ids are read out of
+    // the doc, so a renamed heading fails here instead of opening the guide at its index.
+    const helps = h.root.querySelectorAll('#adminGrid .adm-band').map(b => {
+      const p = b.querySelector('.adm-band-head .band-help');
+      return { band: b.id, src: p && p.getAttribute('data-help-src'), inToggle: !!(p && p.closest('.adm-band-toggle')) };
+    });
+    check('H1 every band head has a Help pill, outside its fold button', helps.every(x => x.src && !x.inToggle), JSON.stringify(helps));
+    const bad = helps.filter(x => {
+      const m = /^\.\.\/(RRUniversity\/[\w-]+\.html)#([\w-]+)$/.exec(x.src || ''); if (!m) return true;
+      // Scripts stripped: the doc's showView comment quotes <h2 id="sh-activity-log"> as an example.
+      const doc = fs.readFileSync(path.join(ROOT, m[1]), 'utf8').replace(/<script\b[\s\S]*?<\/script>/g, '');
+      return (doc.match(new RegExp('id="' + m[2] + '"', 'g')) || []).length !== 1;
+    });
+    check('H1 each Help pill names exactly one section of its doc', bad.length === 0, JSON.stringify(bad));
   }
 
   // D1 D2 D3 ------------------------------------------------------------------
@@ -264,16 +279,21 @@ async function main() {
     setRow(h, 'teamUsersRow', 'watch', '2 people have not signed in for 30 days');
     h.t.sync();
     const team = h.byId('teamRow');
-    check('B1 a band counts its needs', team.querySelector('.adm-band-count').textContent === '2');
+    check('B1 a band\'s pill counts its needs', team.querySelector('.adm-band-pill').textContent === '2 need you', team.querySelector('.adm-band-pill').textContent);
     check('B1 the folded head names the first and the rest', team.querySelector('.adm-band-meta').textContent === 'Access review is overdue (and 1 more)',
       team.querySelector('.adm-band-meta').textContent);
-    check('B1 a clear band says so', h.byId('tsRow').querySelector('.adm-band-meta').textContent === 'Nothing needs you'
-      && h.byId('tsRow').querySelector('.adm-band-count').textContent === '');
+    const ts = h.byId('tsRow');
+    check('B1 a clear band says so in its pill, and what it holds on the line', ts.querySelector('.adm-band-pill').textContent === 'Nothing needs you'
+      && ts.querySelector('.adm-band-meta').textContent === ts.getAttribute('data-desc') && !!ts.getAttribute('data-desc'),
+      ts.querySelector('.adm-band-pill').textContent + ' / ' + ts.querySelector('.adm-band-meta').textContent);
+    h.byId('licDays').textContent = 'Active'; h.t.sync();
+    check('B1 a clear Licensing band shows its status in the pill', /^Active/.test(h.byId('licRow').querySelector('.adm-band-pill').textContent),
+      h.byId('licRow').querySelector('.adm-band-pill').textContent);
 
     const body = h.byId('teamBody');
-    check('B2 folded by default', body.hidden && team.querySelector('.adm-band-head').getAttribute('aria-expanded') === 'false');
+    check('B2 folded by default', body.hidden && team.querySelector('.adm-band-toggle').getAttribute('aria-expanded') === 'false');
     h.t.toggle(team, true);
-    check('B2 opens', !body.hidden && team.querySelector('.adm-band-head').getAttribute('aria-expanded') === 'true' && team.classList.contains('is-open'));
+    check('B2 opens', !body.hidden && team.querySelector('.adm-band-toggle').getAttribute('aria-expanded') === 'true' && team.classList.contains('is-open'));
     team.attrs.class = team.attrs.class.replace(/\bis-open\b/, ''); body.hidden = true;   // a repaint that forgot
     h.t.restore();
     check('B2 the open set survives a repaint', !body.hidden, JSON.stringify(h.store));
