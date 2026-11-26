@@ -1479,7 +1479,7 @@
         <ul>
           <li><strong>Enable CLR integration</strong> (<code>sp_configure 'clr enabled', 1; RECONFIGURE;</code>). The catalog's components are Microsoft-signed.</li>
           <li><strong>Create the SSISDB catalog</strong> in SQL Server Management Studio (<em>Integration Services Catalogs &rarr; Create Catalog</em>), choosing a master-key password. <strong>Record that password and back up the catalog master key</strong> &mdash; it protects the stored connection passwords, and a restore without it loses them.</li>
-          <li><strong>Create a Windows account for RapidReconciler's SSIS steps.</strong> Deploying the package, setting its connections and running the data refresh all run as this account through a SQL Server Agent proxy that GSI&rsquo;s install Script 4 creates. It needs no Windows group or administrator rights, only <em>Log on as a batch job</em>; check that no Group Policy removes that right. Your DBA runs Script 4 for the account with their sysadmin login, so the password stays with you; it is then held only in your SQL Server. If you give GSI a sysadmin install login in <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">step 7</a>, you can give the account and its password there too, and GSI runs Script 4 during the database install, then deletes the password. When the password changes, Script 4 has to run again.</li>
+          <li><strong>Create a Windows account for RapidReconciler's SSIS steps.</strong> Deploying the package, setting its connections and running the data refresh all run as this account through a SQL Server Agent proxy that GSI&rsquo;s install Script 4 creates. It needs no Windows group or administrator rights, only <em>Log on as a batch job</em>; check that no Group Policy removes that right. Your DBA runs Script 4 for the account with their sysadmin login, so the password stays with you; it is then held only in your SQL Server. If you give GSI a sysadmin install login in <a href="javascript:void(0)" onclick="showView('topic-sqlaccess')">step 7</a>, you can give the account and its password there too, and GSI runs Script 4 during the database install and keeps the password, encrypted, to run it again later. When the password changes, Script 4 has to run again. We suggest naming the account <code>svc_rr_ssis</code>; any name works.</li>
           <li><strong>Make sure SQL Server Agent is running</strong>, with startup set to Automatic.</li>
         </ul>
         <p>If your organization already runs other SSIS catalog projects, CLR and the catalog are probably in place already. The account and Script 4 are specific to RapidReconciler.</p>
@@ -2569,8 +2569,8 @@
     <!-- ============ TOPIC: SQL SERVER ACCESS ============
          VLC-296 (owner 2026-11-17): so an onboarding install can run unattended, the customer may give the
          sysadmin install login and the SSIS Windows account here. Both passwords travel only in the sealed
-         .rrprep file (never the email text, never browser storage), and VALC deletes both once Script 4 has
-         run. The submission's "SQL SERVER — INSTALL ACCESS" section carries them; VALC's
+         .rrprep file (never the email text, never browser storage). VALC deletes the install login's once
+         Script 4 has run and keeps the SSIS account's, encrypted (VLC-327, owner 2026-11-26). The submission's "SQL SERVER — INSTALL ACCESS" section carries them; VALC's
          install-email-parser.js reads its labels, so keep them byte-for-byte.
          VLC-299 (owner 2026-11-16, re-confirmed 2026-11-22: "Build it, keep both"): the default is now the
          pre-install grant script below, run by the customer's DBA with their own sysadmin, and the rruser
@@ -2655,7 +2655,7 @@ GO</div></div>
 
       <h2>Creating the SSIS account</h2>
       <ol>
-        <li><strong>Create the account.</strong> A domain account (<code>DOMAIN\rr_ssis</code>) or a local account on the server that runs Integration Services (<code>.\rr_ssis</code>) both work. We recommend a dedicated account. An existing service account can be reused, but every time its password changes the loads stop until Script 4 is run again with the new password.</li>
+        <li><strong>Create the account.</strong> A domain account (<code>DOMAIN\svc_rr_ssis</code>) or a local account on the server that runs Integration Services (<code>.\svc_rr_ssis</code>) both work. We suggest the name <code>svc_rr_ssis</code>, but any name your standards call for works. We recommend a dedicated account. An existing service account can be reused, but every time its password changes the loads stop until Script 4 is run again with the new password.</li>
         <li><strong>Grant it <em>Log on as a batch job</em>.</strong> On that server, open <em>Local Security Policy</em> (<code>secpol.msc</code>) &rarr; <em>Local Policies</em> &rarr; <em>User Rights Assignment</em> &rarr; <em>Log on as a batch job</em>, and add the account. If your domain manages this right through Group Policy, add the account in the Group Policy Object that applies to the server instead (<em>Computer Configuration &rarr; Policies &rarr; Windows Settings &rarr; Security Settings &rarr; Local Policies &rarr; User Rights Assignment</em>). A local change to a right that Group Policy controls is overwritten at the next policy refresh.</li>
         <li><strong>Decide on password expiry.</strong> Set the password not to expire, or plan to re-run Script 4 each time it changes (see below).</li>
       </ol>
@@ -2681,11 +2681,14 @@ go
 --            2. it creates the "RapidReconciler SSIS" credential and SQL Server Agent
 --               proxy for that Windows account, gives the account ssis_admin in SSISDB,
 --               and lets rruser use the proxy for PowerShell job steps.
---          The account's password is kept only in this SQL Server's credential store.
+--          This script stores the account's password only in this SQL Server's credential
+--          store. When GSI runs it for you, GSI also keeps the password, encrypted, so it
+--          can run the script again without asking for it.
+--          We suggest naming the account svc_rr_ssis; any name works.
 --
 --          BEFORE RUNNING: in SSMS, Query &gt; SQLCMD Mode, then put these two lines at the
 --          top of the query window (do not save the file with the password in it):
---              :setvar RR_PROXY_ACCOUNT  "DOMAIN\account"
+--              :setvar RR_PROXY_ACCOUNT  "DOMAIN\svc_rr_ssis"
 --              :setvar RR_PROXY_PASSWORD "the account's password"
 --          From sqlcmd: -v RR_PROXY_ACCOUNT="DOMAIN\account", or set both as
 --          environment variables first, which keeps the password off the command line.
@@ -2766,7 +2769,7 @@ go</div></div>
           <tr><td><code>rruser</code> password <em>(the one your DBA gives the grant script)</em></td><td class="fill-cell"><input class="fill-input" type="password" id="sql-rruser-pass" aria-label="rruser password" autocomplete="new-password"></td></tr>
           <tr><td>Install login <em>(optional: a SQL Server login in the <code>sysadmin</code> role, e.g. <code>sa</code>)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="sql-install-login" aria-label="Install login" placeholder="e.g. sa" autocomplete="off" spellcheck="false"></td></tr>
           <tr><td>Install login password</td><td class="fill-cell"><input class="fill-input" type="password" id="sql-install-pass" aria-label="Install login password" autocomplete="new-password"></td></tr>
-          <tr><td>SSIS Windows account <em>(<code>DOMAIN\account</code>, or <code>.\account</code> for a local account)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="ssis-account" aria-label="SSIS Windows account" placeholder="e.g. CONTOSO\rr_ssis" autocomplete="off" spellcheck="false"></td></tr>
+          <tr><td>SSIS Windows account <em>(<code>DOMAIN\account</code>, or <code>.\account</code> for a local account)</em></td><td class="fill-cell"><input class="fill-input" type="text" id="ssis-account" aria-label="SSIS Windows account" placeholder="e.g. CONTOSO\svc_rr_ssis" autocomplete="off" spellcheck="false"></td></tr>
           <tr><td>SSIS account password</td><td class="fill-cell"><input class="fill-input" type="password" id="ssis-pass" aria-label="SSIS account password" autocomplete="new-password"></td></tr>
         </tbody>
       </table>
@@ -2780,9 +2783,10 @@ go</div></div>
         <ul>
           <li>They travel only inside the encrypted file that <strong>Send via Email</strong> downloads in step 9. The email text shows <em>(in the encrypted attachment)</em> in their place, and this page does not save them anywhere.</li>
           <li>GSI keeps the <code>rruser</code> password encrypted on your RapidReconciler record, because RapidReconciler signs in with it every day. If you change it later, send GSI the new one by encrypted email.</li>
-          <li>GSI keeps the install login&rsquo;s and the SSIS account&rsquo;s passwords encrypted until the database install, uses them for that install, and <strong>deletes both as soon as Script 4 has run</strong>. From then on the SSIS account&rsquo;s password is held only in your SQL Server&rsquo;s credential store.</li>
+          <li>GSI keeps both passwords encrypted and uses them for the database install. <strong>The install login&rsquo;s password is deleted as soon as Script 4 has run.</strong></li>
+          <li>GSI <strong>keeps the SSIS account&rsquo;s password</strong>, encrypted, after the install, so it can run Script 4 again for you without asking for the password again. Your SQL Server&rsquo;s credential store holds it too.</li>
           <li>You can change the install login&rsquo;s password once the install is finished.</li>
-          <li>If the SSIS account&rsquo;s password changes later, Script 4 has to be run again with the new password, or the loads stop. GSI can do this for you, or your DBA can run Script 4 in SQL Server Management Studio.</li>
+          <li>If the SSIS account&rsquo;s password changes later, Script 4 has to be run again with the new password, or the loads stop. GSI can do this for you and replaces the copy it keeps, or your DBA can run Script 4 in SQL Server Management Studio; then tell GSI, so the copy GSI keeps is replaced too.</li>
         </ul>
       </div>
 
